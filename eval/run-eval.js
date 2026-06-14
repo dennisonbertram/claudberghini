@@ -18,7 +18,8 @@ const os = require('os');
 const path = require('path');
 const { runAgentLoop } = require('./harness');
 const { getToolSchemas, makeExecutor } = require('./tools-registry');
-const { TASKS } = require('./tasks');
+// Task set selectable via EVAL_TASKS (e.g. './tasks-hard') for continuous tuning.
+const { TASKS } = require(process.env.EVAL_TASKS || './tasks');
 
 // Default to 6 repeats — 3 was too noisy for reliable config comparison.
 const REPEATS = Number(process.env.EVAL_REPEATS || 6);

@@ -33,13 +33,14 @@ const TOOL_SCHEMAS = {
   },
   Edit: {
     name: 'Edit',
-    description: 'Replace an exact string in a file with a new string.',
+    description: 'Replace a string in a file. Set replace_all=true to replace EVERY occurrence (e.g. renaming a variable).',
     input_schema: {
       type: 'object',
       properties: {
         file_path: { type: 'string', description: 'Path relative to workspace' },
         old_string: { type: 'string', description: 'Exact text to find' },
         new_string: { type: 'string', description: 'Text to replace it with' },
+        replace_all: { type: 'boolean', description: 'Replace all occurrences (default false)' },
       },
       required: ['file_path', 'old_string', 'new_string'],
     },
@@ -114,7 +115,10 @@ function makeExecutor(workspace) {
           const f = resolveIn(workspace, input.file_path);
           const cur = fs.readFileSync(f, 'utf8');
           if (!cur.includes(input.old_string)) return `ERROR: old_string not found in ${input.file_path}`;
-          fs.writeFileSync(f, cur.replace(input.old_string, input.new_string));
+          const updated = input.replace_all
+            ? cur.split(input.old_string).join(input.new_string)
+            : cur.replace(input.old_string, input.new_string);
+          fs.writeFileSync(f, updated);
           return `Edited ${input.file_path}`;
         }
         case 'Bash': {
