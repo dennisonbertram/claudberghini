@@ -10,6 +10,7 @@ import {
   parseToolCalls,
   buildContentBlocks,
   AnthropicTool,
+  ParsedOutput,
 } from './tools';
 
 // Load environment variables
@@ -313,6 +314,130 @@ function convertChatJimmyToAnthropic(
   };
 }
 
+// Strip ChatJimmy control tokens from a raw response body.
+function cleanChatJimmyText(content: string): string {
+  return content
+    .replace(/<\|stats\|>[\s\S]*?<\|\/stats\|>/g, '')
+    .replace(/<\|[^|]*\|>/g, '')
+    .trim();
+}
+
+// One non-streaming model call → cleaned full text. Backend-switchable so we can TUNE
+// against OpenRouter's identical model (legit paid API, no abuse risk) and keep ChatJimmy
+// only for fast final inference. BACKEND=openrouter uses OpenRouter; default = chatjimmy.
+async function callChatJimmyText(chatjimmyRequest: ChatJimmyRequest): Promise<string> {
+  const backend = process.env.BACKEND || 'chatjimmy';
+
+  if (backend === 'openrouter') {
+    const key = process.env.OPENROUTER_API_KEY;
+    if (!key) throw new Error('BACKEND=openrouter but OPENROUTER_API_KEY is not set');
+    const model = process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct';
+    const messages: Array<{ role: string; content: string }> = [];
+    if (chatjimmyRequest.chatOptions.systemPrompt) {
+      messages.push({ role: 'system', content: chatjimmyRequest.chatOptions.systemPrompt });
+    }
+    for (const m of chatjimmyRequest.messages) messages.push({ role: m.role, content: m.content });
+    const resp = await axios.post<any>(
+      'https://openrouter.ai/api/v1/chat/completions',
+      { model, messages, max_tokens: 1024, temperature: Number(process.env.OPENROUTER_TEMP || 0.4) },
+      { timeout: 60000, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` } }
+    );
+    return cleanChatJimmyText(String(resp.data?.choices?.[0]?.message?.content || ''));
+  }
+
+  // Default: ChatJimmy raw-text endpoint
+  const chatjimmyUrl = `${config.chatjimmyApiUrl.replace(/\/$/, '')}/api/chat`;
+  const resp = await axios.post<unknown>(chatjimmyUrl, chatjimmyRequest, {
+    timeout: 30000,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const d = resp.data as any;
+  let content = '';
+  if (typeof d === 'string') content = d;
+  else content = d?.message || d?.content || d?.text || d?.choices?.[0]?.message?.content || '';
+  return cleanChatJimmyText(String(content));
+}
+
+// Does the last message carry a tool_result (i.e. the model should now produce a final
+// answer, not necessarily another tool call)?
+function lastMessageIsToolResult(req: AnthropicRequest): boolean {
+  const m = req.messages[req.messages.length - 1];
+  if (!m || !Array.isArray(m.content)) return false;
+  return (m.content as any[]).some((b) => b && b.type === 'tool_result');
+}
+
+// Extract the text of prior tool results from the (already-flattened) ChatJimmy messages.
+// Used to ground final answers against what tools actually returned.
+function priorToolResultText(chatjimmyRequest: ChatJimmyRequest): string {
+  const all = chatjimmyRequest.messages.map((m) => m.content).join('\n');
+  const matches = all.match(/<tool_response>[\s\S]*?<\/tool_response>/g);
+  return matches ? matches.join('\n') : '';
+}
+
+// Fraction of an answer's significant tokens that actually appear in the reference
+// (the tool output). Higher = more grounded, less hallucinated.
+function groundingScore(answer: string, reference: string): number {
+  if (!reference) return 0;
+  const ref = reference.toLowerCase();
+  const tokens = answer.toLowerCase().match(/[a-z0-9_./-]{4,}/g) || [];
+  if (tokens.length === 0) return 0;
+  let hit = 0;
+  for (const t of tokens) if (ref.includes(t)) hit++;
+  return hit / tokens.length;
+}
+
+// Best-of-N sampling: ChatJimmy is fast + non-deterministic.
+//  - forceTool (a tool call is expected): re-sample until we parse a valid tool_use.
+//  - final-answer turn: sample several and pick the answer MOST GROUNDED in the prior
+//    tool output (kills confabulation like inventing a filename from the search term).
+// This is the single biggest reliability lever for the weak 8B model.
+async function sampleToolResponse(
+  chatjimmyRequest: ChatJimmyRequest,
+  toolNames: Set<string>,
+  forceTool: boolean,
+  maxAttempts: number
+): Promise<ParsedOutput> {
+  let last: ParsedOutput = { text: '', toolUses: [] as any[] };
+  const reference = forceTool ? '' : priorToolResultText(chatjimmyRequest);
+  const answerCandidates: ParsedOutput[] = [];
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let text = '';
+    try {
+      text = await callChatJimmyText(chatjimmyRequest);
+    } catch (e) {
+      continue; // transient — try again
+    }
+    const parsed = parseToolCalls(text, toolNames) as ParsedOutput;
+    last = parsed;
+    if (parsed.toolUses.length > 0) {
+      if (attempt > 0) console.log(`[INFO] best-of-N: got tool call on attempt ${attempt + 1}`);
+      return parsed;
+    }
+    // Final-answer turn: collect non-empty candidates, choose the most grounded later.
+    if (!forceTool && parsed.text.trim()) {
+      answerCandidates.push(parsed);
+      // If there's no tool output to ground against, first non-empty is fine.
+      if (!reference) return parsed;
+    }
+  }
+
+  if (forceTool) {
+    console.log(`[WARN] best-of-N: no tool call after ${maxAttempts} attempts`);
+    return last;
+  }
+
+  if (answerCandidates.length > 0) {
+    answerCandidates.sort((a, b) => groundingScore(b.text, reference) - groundingScore(a.text, reference));
+    const best = answerCandidates[0];
+    if (answerCandidates.length > 1) {
+      console.log(`[INFO] grounded best-of-N: picked answer (grounding ${groundingScore(best.text, reference).toFixed(2)}) from ${answerCandidates.length} candidates`);
+    }
+    return best;
+  }
+  return last;
+}
+
 // Routes
 
 /**
@@ -388,15 +513,6 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
 
       try {
         const chatjimmyUrl = `${config.chatjimmyApiUrl.replace(/\/$/, '')}/api/chat`;
-        console.log(`[DEBUG] Making streaming request to ${chatjimmyUrl}`);
-
-        const axiosResponse = await axios.post(chatjimmyUrl, chatjimmyRequest, {
-          responseType: 'stream',
-          timeout: 60000,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
 
         // --- Anthropic SSE preamble: message_start + content_block_start ---
         sendEvent('message_start', {
@@ -418,6 +534,65 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
           content_block: { type: 'text', text: '' },
         });
         sendEvent('ping', { type: 'ping' });
+
+        // TOOL PATH: best-of-N sampling (buffered), then structured tool_use emit.
+        if (hasTools) {
+          const forceTool = !lastMessageIsToolResult(anthropicRequest);
+          const maxAttempts = forceTool
+            ? Number(process.env.TOOL_SAMPLE_ATTEMPTS || 4)
+            : Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 2);
+          const parsed = await sampleToolResponse(chatjimmyRequest, toolNames, forceTool, maxAttempts);
+
+          if (parsed.text) {
+            sendEvent('content_block_delta', {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: parsed.text },
+            });
+            outputTokenEstimate += Math.ceil(parsed.text.length / 4);
+          }
+          sendEvent('content_block_stop', { type: 'content_block_stop', index: 0 });
+
+          parsed.toolUses.forEach((tu, i) => {
+            const index = i + 1;
+            sendEvent('content_block_start', {
+              type: 'content_block_start',
+              index,
+              content_block: { type: 'tool_use', id: tu.id, name: tu.name, input: {} },
+            });
+            sendEvent('content_block_delta', {
+              type: 'content_block_delta',
+              index,
+              delta: { type: 'input_json_delta', partial_json: JSON.stringify(tu.input ?? {}) },
+            });
+            sendEvent('content_block_stop', { type: 'content_block_stop', index });
+          });
+
+          sendEvent('message_delta', {
+            type: 'message_delta',
+            delta: {
+              stop_reason: parsed.toolUses.length > 0 ? 'tool_use' : 'end_turn',
+              stop_sequence: null,
+            },
+            usage: { output_tokens: outputTokenEstimate },
+          });
+          sendEvent('message_stop', { type: 'message_stop' });
+          res.end();
+          console.log(
+            `[INFO] Streaming(tools) completed in ${Date.now() - startTime}ms — ${parsed.toolUses.length} tool call(s)`
+          );
+          return;
+        }
+
+        // NO-TOOLS PATH: stream raw text incrementally.
+        console.log(`[DEBUG] Making streaming request to ${chatjimmyUrl}`);
+        const axiosResponse = await axios.post(chatjimmyUrl, chatjimmyRequest, {
+          responseType: 'stream',
+          timeout: 60000,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
 
         // ChatJimmy streams RAW TEXT tokens (not JSON, not SSE), terminated by a
         // <|stats|>...<|/stats|> trailer. We accumulate the raw buffer and emit the
@@ -559,24 +734,39 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
     } else {
       // Handle non-streaming (regular) response
       try {
-        const chatjimmyUrl = `${config.chatjimmyApiUrl.replace(/\/$/, '')}/api/chat`;
-        console.log(`[DEBUG] Making non-streaming request to ${chatjimmyUrl}`);
+        let anthropicResponse: unknown;
 
-        const chatjimmyResponse = await axios.post<ChatJimmyResponse>(chatjimmyUrl, chatjimmyRequest, {
-          timeout: 30000,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-
-        console.log(`[DEBUG] Received response from ChatJimmy: ${chatjimmyResponse.status}`);
-
-        // Convert response back to Anthropic format
-        const anthropicResponse = convertChatJimmyToAnthropic(
-          chatjimmyResponse.data,
-          anthropicRequest.model,
-          toolNames
-        );
+        if (hasTools) {
+          // Best-of-N: re-sample until we get a valid tool call when one is expected.
+          const forceTool = !lastMessageIsToolResult(anthropicRequest);
+          const maxAttempts = forceTool
+            ? Number(process.env.TOOL_SAMPLE_ATTEMPTS || 4)
+            : Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 2);
+          const parsed = await sampleToolResponse(chatjimmyRequest, toolNames, forceTool, maxAttempts);
+          const blocks = buildContentBlocks(parsed);
+          const hasToolUse = parsed.toolUses.length > 0;
+          anthropicResponse = {
+            id: `msg_${Date.now()}`,
+            type: 'message',
+            role: 'assistant',
+            content: blocks,
+            model: anthropicRequest.model,
+            stop_reason: hasToolUse ? 'tool_use' : 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 0, output_tokens: Math.ceil((parsed.text.length || 0) / 4) },
+          };
+        } else {
+          const chatjimmyUrl = `${config.chatjimmyApiUrl.replace(/\/$/, '')}/api/chat`;
+          const chatjimmyResponse = await axios.post<ChatJimmyResponse>(chatjimmyUrl, chatjimmyRequest, {
+            timeout: 30000,
+            headers: { 'Content-Type': 'application/json' },
+          });
+          anthropicResponse = convertChatJimmyToAnthropic(
+            chatjimmyResponse.data,
+            anthropicRequest.model,
+            toolNames
+          );
+        }
 
         const duration = Date.now() - startTime;
         console.log(`[INFO] Request completed in ${duration}ms`);
