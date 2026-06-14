@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatJimmy Proxy Tester</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-send {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-send:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-send:active {
+            transform: translateY(0);
+        }
+
+        .btn-clear {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-clear:hover {
+            background: #e0e0e0;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .response-section {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 2px solid #f0f0f0;
+        }
+
+        .response-section h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .response-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #333;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .response-box.error {
+            border-left-color: #dc3545;
+            background: #fff5f5;
+            color: #dc3545;
+        }
+
+        .response-box.success {
+            border-left-color: #28a745;
+            background: #f0fdf4;
+            color: #2d6a4f;
+        }
+
+        .response-box.streaming {
+            border-left-color: #ffc107;
+            background: #fffbf0;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.success {
+            background: #28a745;
+            animation: none;
+        }
+
+        .status-indicator.error {
+            background: #dc3545;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 15px;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f0f0f0;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .model-select {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .model-select label {
+            display: flex;
+            align-items: center;
+            margin: 0;
+            gap: 6px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-item {
+            background: #f0f0f0;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+
+        .stat-label {
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>ChatJimmy Proxy Tester</h1>
+            <p>Test the Anthropic-compatible proxy server on localhost:3000</p>
+        </div>
+
+        <div class="content">
+            <div class="form-group">
+                <label>Model</label>
+                <div class="model-select">
+                    <label>
+                        <input type="radio" name="model" value="gpt-4" checked> GPT-4
+                    </label>
+                    <label>
+                        <input type="radio" name="model" value="gpt-4-turbo"> GPT-4 Turbo
+                    </label>
+                    <label>
+                        <input type="radio" name="model" value="gpt-3.5-turbo"> GPT-3.5 Turbo
+                    </label>
+                    <label>
+                        <input type="radio" name="model" value="claude-3-opus"> Claude 3 Opus
+                    </label>
+                    <label>
+                        <input type="radio" name="model" value="claude-3-haiku"> Claude 3 Haiku
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="message">Message</label>
+                <textarea id="message" placeholder="Enter your message here...">Hello, who are you?</textarea>
+            </div>
+
+            <div class="form-group">
+                <label for="maxTokens">Max Tokens</label>
+                <input type="text" id="maxTokens" value="500" placeholder="500">
+            </div>
+
+            <div class="form-group">
+                <label for="systemPrompt">System Prompt (optional)</label>
+                <textarea id="systemPrompt" placeholder="Enter a system prompt..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-group">
+                    <input type="checkbox" id="streaming" checked>
+                    Enable Streaming
+                </label>
+            </div>
+
+            <div class="button-group">
+                <button class="btn-send" id="sendBtn">Send Request</button>
+                <button class="btn-clear" id="clearBtn">Clear All</button>
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p style="margin-top: 10px; color: #667eea;">Processing...</p>
+            </div>
+
+            <div class="response-section" id="responseSection" style="display: none;">
+                <h2>Response</h2>
+                <div class="response-box" id="responseBox"></div>
+                <div class="stats" id="stats"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:3000/v1/messages';
+
+        const messageInput = document.getElementById('message');
+        const maxTokensInput = document.getElementById('maxTokens');
+        const systemPromptInput = document.getElementById('systemPrompt');
+        const streamingCheckbox = document.getElementById('streaming');
+        const sendBtn = document.getElementById('sendBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const responseSection = document.getElementById('responseSection');
+        const responseBox = document.getElementById('responseBox');
+        const loading = document.getElementById('loading');
+        const stats = document.getElementById('stats');
+
+        sendBtn.addEventListener('click', sendMessage);
+        clearBtn.addEventListener('click', clearAll);
+
+        function getModel() {
+            return document.querySelector('input[name="model"]:checked').value;
+        }
+
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) {
+                alert('Please enter a message');
+                return;
+            }
+
+            sendBtn.disabled = true;
+            loading.style.display = 'block';
+            responseSection.style.display = 'none';
+
+            try {
+                const model = getModel();
+                const maxTokens = parseInt(maxTokensInput.value) || 500;
+                const systemPrompt = systemPromptInput.value.trim();
+                const stream = streamingCheckbox.checked;
+
+                const messages = [];
+                if (systemPrompt) {
+                    messages.push({ role: 'system', content: systemPrompt });
+                }
+                messages.push({ role: 'user', content: message });
+
+                const request = {
+                    model,
+                    messages,
+                    max_tokens: maxTokens,
+                    stream
+                };
+
+                console.log('Sending request:', request);
+
+                const startTime = Date.now();
+
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(request)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                if (stream) {
+                    await handleStreamingResponse(response, startTime);
+                } else {
+                    await handleRegularResponse(response, startTime);
+                }
+            } catch (error) {
+                responseBox.className = 'response-box error';
+                responseBox.textContent = `Error: ${error.message}`;
+                responseSection.style.display = 'block';
+                console.error('Error:', error);
+            } finally {
+                sendBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        }
+
+        async function handleRegularResponse(response, startTime) {
+            const data = await response.json();
+            const endTime = Date.now();
+            const duration = endTime - startTime;
+
+            console.log('Response:', data);
+
+            responseSection.style.display = 'block';
+            responseBox.className = 'response-box success';
+
+            let content = '';
+            if (data.content && Array.isArray(data.content)) {
+                content = data.content.map(c => c.text).join('\n');
+            }
+
+            const formattedResponse = JSON.stringify(data, null, 2);
+            responseBox.textContent = formattedResponse;
+
+            stats.innerHTML = `
+                <div class="stat-item">
+                    <div class="stat-label">Duration</div>
+                    <div class="stat-value">${duration}ms</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Model</div>
+                    <div class="stat-value">${data.model}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Stop Reason</div>
+                    <div class="stat-value">${data.stop_reason}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Output Tokens</div>
+                    <div class="stat-value">${data.usage?.output_tokens || 0}</div>
+                </div>
+            `;
+        }
+
+        async function handleStreamingResponse(response, startTime) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullContent = '';
+            let messageCount = 0;
+
+            responseSection.style.display = 'block';
+            responseBox.className = 'response-box streaming';
+            responseBox.textContent = 'Streaming response...\n\n';
+
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const jsonStr = line.substring(6);
+                            if (jsonStr.trim()) {
+                                try {
+                                    const event = JSON.parse(jsonStr);
+                                    messageCount++;
+
+                                    if (event.type === 'content_block_delta') {
+                                        const text = event.delta?.text || '';
+                                        fullContent += text;
+                                        responseBox.textContent = fullContent || '(streaming...)';
+                                        responseBox.scrollTop = responseBox.scrollHeight;
+                                    } else if (event.type === 'message_stop') {
+                                        // Final message
+                                    }
+
+                                    console.log('Event:', event);
+                                } catch (e) {
+                                    console.error('Failed to parse event:', jsonStr, e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                const endTime = Date.now();
+                const duration = endTime - startTime;
+
+                responseBox.className = 'response-box success';
+                responseBox.textContent = fullContent || '(no content)';
+
+                stats.innerHTML = `
+                    <div class="stat-item">
+                        <div class="stat-label">Duration</div>
+                        <div class="stat-value">${duration}ms</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Events Received</div>
+                        <div class="stat-value">${messageCount}</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Content Length</div>
+                        <div class="stat-value">${fullContent.length} chars</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Status</div>
+                        <div class="stat-value">Complete</div>
+                    </div>
+                `;
+            } catch (error) {
+                responseBox.className = 'response-box error';
+                responseBox.textContent = `Streaming error: ${error.message}`;
+                console.error('Stream error:', error);
+            }
+        }
+
+        function clearAll() {
+            messageInput.value = '';
+            maxTokensInput.value = '500';
+            systemPromptInput.value = '';
+            streamingCheckbox.checked = true;
+            responseSection.style.display = 'none';
+            responseBox.textContent = '';
+        }
+    </script>
+</body>
+</html>
