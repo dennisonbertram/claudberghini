@@ -412,6 +412,13 @@ async function sampleToolResponse(
     last = parsed;
     if (parsed.toolUses.length > 0) {
       if (attempt > 0) console.log(`[INFO] best-of-N: got tool call on attempt ${attempt + 1}`);
+      // The weak model often fabricates a tool result + conclusion right after its tool
+      // call ("## Output from tool... The final answer is X"). When a tool call is
+      // expected, keep ONLY the first call and drop all fabricated continuation text so it
+      // can't pollute the conversation or pre-bias the model's answer.
+      if (forceTool) {
+        return { text: '', toolUses: [parsed.toolUses[0]] };
+      }
       return parsed;
     }
     // Final-answer turn: collect non-empty candidates, choose the most grounded later.
@@ -539,8 +546,8 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
         if (hasTools) {
           const forceTool = !lastMessageIsToolResult(anthropicRequest);
           const maxAttempts = forceTool
-            ? Number(process.env.TOOL_SAMPLE_ATTEMPTS || 4)
-            : Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 2);
+            ? Number(process.env.TOOL_SAMPLE_ATTEMPTS || 5)
+            : Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 3);
           const parsed = await sampleToolResponse(chatjimmyRequest, toolNames, forceTool, maxAttempts);
 
           if (parsed.text) {
@@ -740,8 +747,8 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
           // Best-of-N: re-sample until we get a valid tool call when one is expected.
           const forceTool = !lastMessageIsToolResult(anthropicRequest);
           const maxAttempts = forceTool
-            ? Number(process.env.TOOL_SAMPLE_ATTEMPTS || 4)
-            : Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 2);
+            ? Number(process.env.TOOL_SAMPLE_ATTEMPTS || 5)
+            : Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 3);
           const parsed = await sampleToolResponse(chatjimmyRequest, toolNames, forceTool, maxAttempts);
           const blocks = buildContentBlocks(parsed);
           const hasToolUse = parsed.toolUses.length > 0;

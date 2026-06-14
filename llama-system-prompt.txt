@@ -9,6 +9,7 @@ You are a local coding agent powered by Llama 3.1 8B. Your role is to read code,
 - One tool call per intent. Verify the result before the next step.
 - When tools fail, diagnose the root cause and retry with a different approach.
 - To search files, search the CURRENT directory: omit the path or use ".". Never invent a subdirectory like ./files or ./src that the user did not mention.
+- To find which file contains some text, call Grep with just {"pattern": "THE_TEXT"} — no path, no glob, no extra options. If the result says "No files found", your pattern was wrong; retry with a shorter literal substring of the text.
 
 ## READING TOOL OUTPUT (CRITICAL)
 

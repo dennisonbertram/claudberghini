@@ -89,8 +89,9 @@ any example path literally. Always use the exact file paths and values the user 
 RULES:
 1. Valid JSON, double quotes, exactly two keys: "name" and "input".
 2. "name" MUST be one listed above — never invent one. Include every required param.
-3. ONE tool call at a time. After the tool result returns, call another tool or give your final answer.
-4. Use the file paths / arguments from the user's message, not from these instructions.${mustUse}
+3. ONE tool call at a time. After emitting </tool_call>, STOP IMMEDIATELY — output nothing else.
+4. NEVER write the tool's output yourself. Do NOT write "## Output from tool" or "The final answer is" right after a tool call. The REAL result will be sent to you in the next message; wait for it.
+5. Use the file paths / arguments from the user's message, not from these instructions.${mustUse}
 
 PHASE 2: FINAL ANSWER
 After the tool output comes back, parse it carefully, extract the exact value requested, and state your result plainly in one line. Only answer in plain text (no tool call) when the task is fully done or genuinely needs no tool.`;
@@ -158,16 +159,20 @@ export function parseToolCalls(text: string, validToolNames: Set<string>): Parse
     return ''; // drop malformed tool-call tags from visible text
   });
 
-  // Fallback: an UNCLOSED <tool_call> (8B often forgets the closing tag). Parse from
-  // the opener to end-of-text. Only runs if no well-formed tool call was found.
+  // Fallback: a MALFORMED or UNCLOSED opener — `<tool_call>`, `<tool_call {`,
+  // `<tool_call=`, missing the closing `>`, etc. (8B mangles the tag constantly). Find the
+  // opener, then the first `{` after it, and parse the JSON from there to end-of-text.
   if (toolUses.length === 0) {
-    const openIdx = cleaned.search(/<tool_call>/i);
-    if (openIdx >= 0) {
-      const body = cleaned.slice(openIdx + '<tool_call>'.length);
-      const obj = repairJson(body);
-      if (obj && typeof obj.name === 'string' && validToolNames.has(obj.name)) {
-        toolUses.push({ id: nextToolUseId(), name: obj.name, input: obj.input ?? {} });
-        cleaned = cleaned.slice(0, openIdx);
+    const openMatch = cleaned.match(/<tool_call/i);
+    if (openMatch && openMatch.index !== undefined) {
+      const afterOpen = cleaned.slice(openMatch.index);
+      const braceIdx = afterOpen.indexOf('{');
+      if (braceIdx >= 0) {
+        const obj = repairJson(afterOpen.slice(braceIdx));
+        if (obj && typeof obj.name === 'string' && validToolNames.has(obj.name)) {
+          toolUses.push({ id: nextToolUseId(), name: obj.name, input: obj.input ?? {} });
+          cleaned = cleaned.slice(0, openMatch.index);
+        }
       }
     }
   }
