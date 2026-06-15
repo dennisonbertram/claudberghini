@@ -1,9 +1,9 @@
 #!/bin/zsh
-# Real-path eval: run chatjimmy-code (full Claude Code harness via ChatJimmy) on the 4
+# Real-path eval: run claudberghini (full Claude Code harness via Claudberghini) on the 4
 # target tasks N times each, in a sandboxed workspace, and report pass rates.
 # Usage: real-path-eval.sh [N]   (default N=5)
 N="${1:-5}"
-CJ=/Users/dennison/develop/chatjimmy-proxy/chatjimmy-code
+CJ=/Users/dennison/develop/claudberghini/claudberghini
 WS=/tmp/cj-rpe
 rm -rf "$WS"; mkdir -p "$WS"; cd "$WS"; git init -q 2>/dev/null
 

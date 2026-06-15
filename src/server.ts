@@ -18,13 +18,13 @@ dotenv.config();
 
 // Configuration
 const config: ProxyConfig = {
-  chatjimmyApiUrl: process.env.CHATJIMMY_API_URL || 'https://chatjimmy.ai',
+  claudberghiniApiUrl: process.env.CLAUDBERGHINI_API_URL || 'https://chatjimmy.ai',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
   proxyPort: parseInt(process.env.PROXY_PORT || '3000', 10),
   logLevel: (process.env.LOG_LEVEL as 'debug' | 'info' | 'warn' | 'error') || 'info',
 };
 
-// Model mapping: Anthropic model names to ChatJimmy model names
+// Model mapping: Anthropic model names to Claudberghini model names
 const MODEL_MAPPING: Record<string, string> = {
   'gpt-4': 'llama3.1-8B',
   'gpt-4-turbo': 'llama3.1-8B',
@@ -60,24 +60,24 @@ interface AnthropicRequest {
   tool_choice?: { type: string; name?: string };
 }
 
-interface ChatJimmyMessage {
+interface ClaudberghiniMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
-interface ChatJimmyChatOptions {
+interface ClaudberghiniChatOptions {
   selectedModel: string;
   systemPrompt?: string;
   topK?: number;
 }
 
-interface ChatJimmyRequest {
-  messages: ChatJimmyMessage[];
-  chatOptions: ChatJimmyChatOptions;
+interface ClaudberghiniRequest {
+  messages: ClaudberghiniMessage[];
+  chatOptions: ClaudberghiniChatOptions;
   attachment: null | unknown;
 }
 
-interface ChatJimmyResponse {
+interface ClaudberghiniResponse {
   message?: string;
   content?: string;
   text?: string;
@@ -104,11 +104,11 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 // Conversion helper functions
 
 /**
- * Convert Anthropic format request to ChatJimmy format
+ * Convert Anthropic format request to Claudberghini format
  */
 // Flatten Anthropic content (string OR array of content blocks) into a plain string.
 // Claude Code sends system + message content as arrays of {type:'text', text:'...'} blocks
-// (often with cache_control), and tool_result/tool_use blocks. ChatJimmy needs plain strings.
+// (often with cache_control), and tool_result/tool_use blocks. Claudberghini needs plain strings.
 function flattenContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -136,7 +136,7 @@ function flattenContent(content: unknown): string {
 }
 
 // Core coding toolset advertised to the (weak) Llama 3.1 8B model. Claude Code sends
-// ~60 tools (many noisy mcp__* / orchestration tools) which bloat ChatJimmy's tiny
+// ~60 tools (many noisy mcp__* / orchestration tools) which bloat Claudberghini's tiny
 // ~24KB context AND cause wrong-tool selection. We filter to the essentials so the
 // model has a small, relevant menu. Override with TOOL_ALLOWLIST=Read,Edit,Bash (or
 // TOOL_ALLOWLIST=* to disable filtering).
@@ -176,10 +176,10 @@ function filterToolsForCoding(tools: AnthropicTool[]): AnthropicTool[] {
   return kept.length > 0 ? kept : tools;
 }
 
-function convertAnthropicToChatJimmy(req: AnthropicRequest): ChatJimmyRequest {
+function convertAnthropicToClaudberghini(req: AnthropicRequest): ClaudberghiniRequest {
   // Extract system message from messages array or use the system field
   let systemPrompt: string | undefined;
-  let messages: ChatJimmyMessage[] = [];
+  let messages: ClaudberghiniMessage[] = [];
 
   if (req.system) {
     systemPrompt = flattenContent(req.system);
@@ -207,7 +207,7 @@ function convertAnthropicToChatJimmy(req: AnthropicRequest): ChatJimmyRequest {
   }
 
   // Map model name
-  const chatjimmyModel = MODEL_MAPPING[req.model] || MODEL_MAPPING['default'];
+  const claudberghiniModel = MODEL_MAPPING[req.model] || MODEL_MAPPING['default'];
 
   // Validate and set max_tokens
   const maxTokens = req.max_tokens || 2048;
@@ -215,7 +215,7 @@ function convertAnthropicToChatJimmy(req: AnthropicRequest): ChatJimmyRequest {
     console.warn(`[WARN] max_tokens ${maxTokens} exceeds maximum 4096, capping to 4096`);
   }
 
-  // Inject tool-calling instructions into the system prompt. ChatJimmy has no native
+  // Inject tool-calling instructions into the system prompt. Claudberghini has no native
   // `tools` param, so the only channel is the system prompt + output parsing.
   // DISABLE_TOOL_INJECTION=1 lets the eval harness own the full system prompt (it still
   // embeds the tool-call format), while the proxy only parses the output back.
@@ -227,7 +227,7 @@ function convertAnthropicToChatJimmy(req: AnthropicRequest): ChatJimmyRequest {
     }
   }
 
-  // ChatJimmy hard-caps input around ~24KB (returns empty above it). Budget the
+  // Claudberghini hard-caps input around ~24KB (returns empty above it). Budget the
   // system prompt so system + messages stay under that ceiling. Keep the head
   // (core instructions + tool defs) and tail (most recent guidance), drop the middle.
   const MAX_SYSTEM_BYTES = Number(process.env.MAX_SYSTEM_BYTES) || 18000;
@@ -239,11 +239,11 @@ function convertAnthropicToChatJimmy(req: AnthropicRequest): ChatJimmyRequest {
       systemPrompt.slice(0, head) +
       `\n\n[...${original - MAX_SYSTEM_BYTES} chars trimmed to fit context...]\n\n` +
       systemPrompt.slice(original - tail);
-    console.warn(`[WARN] System prompt trimmed ${original} -> ${systemPrompt.length} bytes to fit ChatJimmy context`);
+    console.warn(`[WARN] System prompt trimmed ${original} -> ${systemPrompt.length} bytes to fit Claudberghini context`);
   }
 
-  const chatOptions: ChatJimmyChatOptions = {
-    selectedModel: chatjimmyModel,
+  const chatOptions: ClaudberghiniChatOptions = {
+    selectedModel: claudberghiniModel,
     topK: 8,
   };
 
@@ -259,33 +259,33 @@ function convertAnthropicToChatJimmy(req: AnthropicRequest): ChatJimmyRequest {
 }
 
 /**
- * Convert ChatJimmy response to Anthropic format
+ * Convert Claudberghini response to Anthropic format
  */
-function convertChatJimmyToAnthropic(
-  chatjimmyResponse: ChatJimmyResponse,
+function convertClaudberghiniToAnthropic(
+  claudberghiniResponse: ClaudberghiniResponse,
   model: string,
   toolNames?: Set<string>
 ): unknown {
-  // Extract the content from various possible ChatJimmy response formats
+  // Extract the content from various possible Claudberghini response formats
   let content = '';
 
-  if (typeof chatjimmyResponse === 'string') {
-    content = chatjimmyResponse;
-  } else if (chatjimmyResponse.message) {
-    content = chatjimmyResponse.message;
-  } else if (chatjimmyResponse.content) {
-    content = chatjimmyResponse.content;
-  } else if (chatjimmyResponse.text) {
-    content = chatjimmyResponse.text;
+  if (typeof claudberghiniResponse === 'string') {
+    content = claudberghiniResponse;
+  } else if (claudberghiniResponse.message) {
+    content = claudberghiniResponse.message;
+  } else if (claudberghiniResponse.content) {
+    content = claudberghiniResponse.content;
+  } else if (claudberghiniResponse.text) {
+    content = claudberghiniResponse.text;
   } else if (
-    chatjimmyResponse.choices &&
-    Array.isArray(chatjimmyResponse.choices) &&
-    chatjimmyResponse.choices.length > 0
+    claudberghiniResponse.choices &&
+    Array.isArray(claudberghiniResponse.choices) &&
+    claudberghiniResponse.choices.length > 0
   ) {
-    content = chatjimmyResponse.choices[0].message?.content || '';
+    content = claudberghiniResponse.choices[0].message?.content || '';
   }
 
-  // Strip ChatJimmy control tokens (<|stats|>...<|/stats|>, <|eot_id|>, etc.)
+  // Strip Claudberghini control tokens (<|stats|>...<|/stats|>, <|eot_id|>, etc.)
   content = content
     .replace(/<\|stats\|>[\s\S]*?<\|\/stats\|>/g, '')
     .replace(/<\|[^|]*\|>/g, '')
@@ -314,8 +314,8 @@ function convertChatJimmyToAnthropic(
   };
 }
 
-// Strip ChatJimmy control tokens from a raw response body.
-function cleanChatJimmyText(content: string): string {
+// Strip Claudberghini control tokens from a raw response body.
+function cleanClaudberghiniText(content: string): string {
   return content
     .replace(/<\|stats\|>[\s\S]*?<\|\/stats\|>/g, '')
     .replace(/<\|[^|]*\|>/g, '')
@@ -323,31 +323,31 @@ function cleanChatJimmyText(content: string): string {
 }
 
 // One non-streaming model call → cleaned full text. Backend-switchable so we can TUNE
-// against OpenRouter's identical model (legit paid API, no abuse risk) and keep ChatJimmy
-// only for fast final inference. BACKEND=openrouter uses OpenRouter; default = chatjimmy.
-async function callChatJimmyText(chatjimmyRequest: ChatJimmyRequest): Promise<string> {
-  const backend = process.env.BACKEND || 'chatjimmy';
+// against OpenRouter's identical model (legit paid API, no abuse risk) and keep Claudberghini
+// only for fast final inference. BACKEND=openrouter uses OpenRouter; default = claudberghini.
+async function callClaudberghiniText(claudberghiniRequest: ClaudberghiniRequest): Promise<string> {
+  const backend = process.env.BACKEND || 'claudberghini';
 
   if (backend === 'openrouter') {
     const key = process.env.OPENROUTER_API_KEY;
     if (!key) throw new Error('BACKEND=openrouter but OPENROUTER_API_KEY is not set');
     const model = process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct';
     const messages: Array<{ role: string; content: string }> = [];
-    if (chatjimmyRequest.chatOptions.systemPrompt) {
-      messages.push({ role: 'system', content: chatjimmyRequest.chatOptions.systemPrompt });
+    if (claudberghiniRequest.chatOptions.systemPrompt) {
+      messages.push({ role: 'system', content: claudberghiniRequest.chatOptions.systemPrompt });
     }
-    for (const m of chatjimmyRequest.messages) messages.push({ role: m.role, content: m.content });
+    for (const m of claudberghiniRequest.messages) messages.push({ role: m.role, content: m.content });
     const resp = await axios.post<any>(
       'https://openrouter.ai/api/v1/chat/completions',
       { model, messages, max_tokens: 1024, temperature: Number(process.env.OPENROUTER_TEMP || 0.4) },
       { timeout: 60000, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` } }
     );
-    return cleanChatJimmyText(String(resp.data?.choices?.[0]?.message?.content || ''));
+    return cleanClaudberghiniText(String(resp.data?.choices?.[0]?.message?.content || ''));
   }
 
-  // Default: ChatJimmy raw-text endpoint
-  const chatjimmyUrl = `${config.chatjimmyApiUrl.replace(/\/$/, '')}/api/chat`;
-  const resp = await axios.post<unknown>(chatjimmyUrl, chatjimmyRequest, {
+  // Default: Claudberghini raw-text endpoint
+  const claudberghiniUrl = `${config.claudberghiniApiUrl.replace(/\/$/, '')}/api/chat`;
+  const resp = await axios.post<unknown>(claudberghiniUrl, claudberghiniRequest, {
     timeout: 30000,
     headers: { 'Content-Type': 'application/json' },
   });
@@ -355,7 +355,7 @@ async function callChatJimmyText(chatjimmyRequest: ChatJimmyRequest): Promise<st
   let content = '';
   if (typeof d === 'string') content = d;
   else content = d?.message || d?.content || d?.text || d?.choices?.[0]?.message?.content || '';
-  return cleanChatJimmyText(String(content));
+  return cleanClaudberghiniText(String(content));
 }
 
 // Does the last message carry a tool_result (i.e. the model should now produce a final
@@ -366,10 +366,10 @@ function lastMessageIsToolResult(req: AnthropicRequest): boolean {
   return (m.content as any[]).some((b) => b && b.type === 'tool_result');
 }
 
-// Extract the text of prior tool results from the (already-flattened) ChatJimmy messages.
+// Extract the text of prior tool results from the (already-flattened) Claudberghini messages.
 // Used to ground final answers against what tools actually returned.
-function priorToolResultText(chatjimmyRequest: ChatJimmyRequest): string {
-  const all = chatjimmyRequest.messages.map((m) => m.content).join('\n');
+function priorToolResultText(claudberghiniRequest: ClaudberghiniRequest): string {
+  const all = claudberghiniRequest.messages.map((m) => m.content).join('\n');
   const matches = all.match(/<tool_response>[\s\S]*?<\/tool_response>/g);
   return matches ? matches.join('\n') : '';
 }
@@ -406,7 +406,7 @@ function guardToolUse(tu: any): any | null {
   return tu;
 }
 
-// Best-of-N sampling: ChatJimmy is fast + non-deterministic.
+// Best-of-N sampling: Claudberghini is fast + non-deterministic.
 //   - valid tool call → use it (first call only; drop any fabricated continuation).
 //   - the model ATTEMPTS a tool call but botches the format → re-sample for a clean one.
 //   - plain TEXT with no tool attempt → a deliberate conversational/final answer; ACCEPT
@@ -415,19 +415,19 @@ function guardToolUse(tu: any): any | null {
 //   - final-answer turn (groundAgainstTools): sample several texts, pick the one MOST
 //     GROUNDED in prior tool output (kills confabulation).
 async function sampleToolResponse(
-  chatjimmyRequest: ChatJimmyRequest,
+  claudberghiniRequest: ClaudberghiniRequest,
   toolNames: Set<string>,
   groundAgainstTools: boolean,
   maxAttempts: number
 ): Promise<ParsedOutput> {
   let last: ParsedOutput = { text: '', toolUses: [] as any[] };
-  const reference = groundAgainstTools ? priorToolResultText(chatjimmyRequest) : '';
+  const reference = groundAgainstTools ? priorToolResultText(claudberghiniRequest) : '';
   const answerCandidates: ParsedOutput[] = [];
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let text = '';
     try {
-      text = await callChatJimmyText(chatjimmyRequest);
+      text = await callClaudberghiniText(claudberghiniRequest);
     } catch (e) {
       continue; // transient — try again
     }
@@ -470,7 +470,7 @@ async function sampleToolResponse(
 
 /**
  * Anthropic-compatible POST /v1/messages endpoint
- * Converts Anthropic format to ChatJimmy format, proxies request, converts response back
+ * Converts Anthropic format to Claudberghini format, proxies request, converts response back
  */
 app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
   const timestamp = new Date().toISOString();
@@ -506,12 +506,12 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
     console.log(`[DEBUG] Messages count: ${anthropicRequest.messages.length}`);
     console.log(`[DEBUG] Stream: ${anthropicRequest.stream || false}`);
 
-    // Convert to ChatJimmy format
-    const chatjimmyRequest = convertAnthropicToChatJimmy(anthropicRequest);
-    console.log(`[DEBUG] Converted to ChatJimmy format with model: ${chatjimmyRequest.chatOptions.selectedModel}`);
+    // Convert to Claudberghini format
+    const claudberghiniRequest = convertAnthropicToClaudberghini(anthropicRequest);
+    console.log(`[DEBUG] Converted to Claudberghini format with model: ${claudberghiniRequest.chatOptions.selectedModel}`);
     if (process.env.DUMP_MESSAGES === '1') {
-      console.log(`[DUMP] systemPrompt(${(chatjimmyRequest.chatOptions.systemPrompt || '').length}b): ${JSON.stringify((chatjimmyRequest.chatOptions.systemPrompt || '').slice(-600))}`);
-      console.log(`[DUMP] messages: ${JSON.stringify(chatjimmyRequest.messages.map((m) => ({ role: m.role, content: m.content.slice(0, 300) })))}`);
+      console.log(`[DUMP] systemPrompt(${(claudberghiniRequest.chatOptions.systemPrompt || '').length}b): ${JSON.stringify((claudberghiniRequest.chatOptions.systemPrompt || '').slice(-600))}`);
+      console.log(`[DUMP] messages: ${JSON.stringify(claudberghiniRequest.messages.map((m) => ({ role: m.role, content: m.content.slice(0, 300) })))}`);
     }
 
     // Valid tool names for this request (used to parse tool calls from model output)
@@ -540,7 +540,7 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
       let streamClosed = false;
 
       try {
-        const chatjimmyUrl = `${config.chatjimmyApiUrl.replace(/\/$/, '')}/api/chat`;
+        const claudberghiniUrl = `${config.claudberghiniApiUrl.replace(/\/$/, '')}/api/chat`;
 
         // --- Anthropic SSE preamble: message_start + content_block_start ---
         sendEvent('message_start', {
@@ -572,7 +572,7 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
           const maxAttempts = groundAgainstTools
             ? Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 3)
             : Number(process.env.TOOL_SAMPLE_ATTEMPTS || 5);
-          const parsed = await sampleToolResponse(chatjimmyRequest, toolNames, groundAgainstTools, maxAttempts);
+          const parsed = await sampleToolResponse(claudberghiniRequest, toolNames, groundAgainstTools, maxAttempts);
 
           if (parsed.text) {
             sendEvent('content_block_delta', {
@@ -616,8 +616,8 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
         }
 
         // NO-TOOLS PATH: stream raw text incrementally.
-        console.log(`[DEBUG] Making streaming request to ${chatjimmyUrl}`);
-        const axiosResponse = await axios.post(chatjimmyUrl, chatjimmyRequest, {
+        console.log(`[DEBUG] Making streaming request to ${claudberghiniUrl}`);
+        const axiosResponse = await axios.post(claudberghiniUrl, claudberghiniRequest, {
           responseType: 'stream',
           timeout: 60000,
           headers: {
@@ -625,7 +625,7 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
           },
         });
 
-        // ChatJimmy streams RAW TEXT tokens (not JSON, not SSE), terminated by a
+        // Claudberghini streams RAW TEXT tokens (not JSON, not SSE), terminated by a
         // <|stats|>...<|/stats|> trailer. We accumulate the raw buffer and emit the
         // "clean" text (everything before the first control token) incrementally.
         let raw = '';
@@ -776,7 +776,7 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
           const maxAttempts = groundAgainstTools
             ? Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 3)
             : Number(process.env.TOOL_SAMPLE_ATTEMPTS || 5);
-          const parsed = await sampleToolResponse(chatjimmyRequest, toolNames, groundAgainstTools, maxAttempts);
+          const parsed = await sampleToolResponse(claudberghiniRequest, toolNames, groundAgainstTools, maxAttempts);
           const blocks = buildContentBlocks(parsed);
           const hasToolUse = parsed.toolUses.length > 0;
           anthropicResponse = {
@@ -790,13 +790,13 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
             usage: { input_tokens: 0, output_tokens: Math.ceil((parsed.text.length || 0) / 4) },
           };
         } else {
-          const chatjimmyUrl = `${config.chatjimmyApiUrl.replace(/\/$/, '')}/api/chat`;
-          const chatjimmyResponse = await axios.post<ChatJimmyResponse>(chatjimmyUrl, chatjimmyRequest, {
+          const claudberghiniUrl = `${config.claudberghiniApiUrl.replace(/\/$/, '')}/api/chat`;
+          const claudberghiniResponse = await axios.post<ClaudberghiniResponse>(claudberghiniUrl, claudberghiniRequest, {
             timeout: 30000,
             headers: { 'Content-Type': 'application/json' },
           });
-          anthropicResponse = convertChatJimmyToAnthropic(
-            chatjimmyResponse.data,
+          anthropicResponse = convertClaudberghiniToAnthropic(
+            claudberghiniResponse.data,
             anthropicRequest.model,
             toolNames
           );
@@ -808,7 +808,7 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
         res.status(200).json(anthropicResponse);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`[ERROR] ChatJimmy request failed: ${errorMsg}`);
+        console.error(`[ERROR] Claudberghini request failed: ${errorMsg}`);
 
         if (axios.isAxiosError(error) && error.response) {
           res.status(error.response.status).json({
@@ -949,7 +949,7 @@ app.post('/proxy', async (req: Request, res: Response): Promise<void> => {
  */
 app.get('/config', (_req: Request, res: Response) => {
   res.json({
-    chatjimmyApiUrl: config.chatjimmyApiUrl,
+    claudberghiniApiUrl: config.claudberghiniApiUrl,
     proxyPort: config.proxyPort,
     logLevel: config.logLevel,
     upstreamKeyConfigured: !!config.anthropicApiKey,
@@ -982,29 +982,29 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void =>
 const server = app.listen(config.proxyPort, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║   ChatJimmy Anthropic Proxy Server                         ║
+║   Claudberghini Anthropic Proxy Server                         ║
 ╚════════════════════════════════════════════════════════════╝
 
 Server running at: http://localhost:${config.proxyPort}
 Log Level: ${config.logLevel}
-Upstream API: ${config.chatjimmyApiUrl}
+Upstream API: ${config.claudberghiniApiUrl}
 
 Available Endpoints:
   GET  /health                - Server health check
   GET  /health/upstream       - Upstream connectivity check
   GET  /config                - Server configuration (non-sensitive)
-  POST /v1/messages           - Anthropic-compatible message endpoint (converts to ChatJimmy)
+  POST /v1/messages           - Anthropic-compatible message endpoint (converts to Claudberghini)
   POST /convert               - Format conversion
   POST /proxy                 - Proxy API requests
 
-Supported Models (mapped to ChatJimmy):
+Supported Models (mapped to Claudberghini):
   - gpt-4, gpt-4-turbo, gpt-4o → llama3.1-8B
   - gpt-3.5-turbo → llama2-7B
   - claude-3-opus, claude-3-sonnet, claude-2 → llama3.1-8B
   - claude-3-haiku → llama2-7B
 
 Features:
-  - Converts Anthropic message format to ChatJimmy format
+  - Converts Anthropic message format to Claudberghini format
   - Supports both streaming and non-streaming requests
   - Maps model names automatically
   - Converts system messages from messages array

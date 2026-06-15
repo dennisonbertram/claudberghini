@@ -1,6 +1,6 @@
 /**
  * Minimal agentic loop — a tiny stand-in for Claude Code — that drives the model
- * through the ChatJimmy proxy using the Anthropic SDK. Full control over system
+ * through the Claudberghini proxy using the Anthropic SDK. Full control over system
  * prompt and toolset, so we can optimize them.
  */
 const Anthropic = require('@anthropic-ai/sdk');

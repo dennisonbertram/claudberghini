@@ -1,7 +1,7 @@
 /**
  * Tool registry for the eval harness: Anthropic-format tool schemas + real executors
  * that operate against a sandboxed workspace directory. This is a minimal stand-in for
- * Claude Code's core coding tools, so we can measure how well ChatJimmy/Llama-8B drives
+ * Claude Code's core coding tools, so we can measure how well Claudberghini/Llama-8B drives
  * an agent loop under different (system prompt, toolset) configs.
  */
 const fs = require('fs');

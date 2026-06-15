@@ -1,5 +1,5 @@
 export interface ProxyConfig {
-  chatjimmyApiUrl: string;
+  claudberghiniApiUrl: string;
   anthropicApiKey: string;
   proxyPort: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';

@@ -52,7 +52,7 @@ export class APIHandler {
    */
   async checkUpstreamConnectivity(): Promise<{ connected: boolean; error?: string }> {
     try {
-      const response = await axios.head(this.config.chatjimmyApiUrl, {
+      const response = await axios.head(this.config.claudberghiniApiUrl, {
         timeout: 5000,
       });
       this.log('info', `Upstream connectivity check successful: ${response.status}`);
@@ -68,14 +68,14 @@ export class APIHandler {
   }
 
   private buildUrl(endpoint: string): string {
-    const baseUrl = this.config.chatjimmyApiUrl.replace(/\/$/, '');
+    const baseUrl = this.config.claudberghiniApiUrl.replace(/\/$/, '');
     const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     return `${baseUrl}${path}`;
   }
 
   private buildHeaders(customHeaders?: Record<string, string>): Record<string, string> {
     const headers: Record<string, string> = {
-      'User-Agent': 'ChatJimmy-Proxy/1.0.0',
+      'User-Agent': 'Claudberghini-Proxy/1.0.0',
       'Content-Type': 'application/json',
     };
 

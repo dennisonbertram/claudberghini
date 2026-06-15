@@ -1,16 +1,16 @@
 #!/bin/zsh
-# chatjimmy-code — run Claude Code on ChatJimmy's Llama 3.1 8B backend, bare-basic.
+# claudberghini — run Claude Code on Claudberghini's Llama 3.1 8B backend, bare-basic.
 #
 # Bundles everything we found maximizes the weak model's performance:
-#   - routes through the ChatJimmy proxy via deep-claude (--endpoint chatjimmy)
+#   - routes through the Claudberghini proxy via deep-claude (--endpoint claudberghini)
 #   - replaces Claude Code's 120KB system prompt with our compact 2KB Llama prompt
 #   - no MCP servers (--strict-mcp-config), no skills (--disable-slash-commands)
 #   - no dynamic system-prompt sections
 #   - coding-only toolset
 # The proxy additionally strips <system-reminder> noise and injects the tool-call format.
 #
-# Usage:  chatjimmy-code [extra claude args] -p "your task"
-#         chatjimmy-code            # interactive
+# Usage:  claudberghini [extra claude args] -p "your task"
+#         claudberghini            # interactive
 # Run it from the project directory you want to work in (Claude Code sandboxes tools to cwd).
 
 set -e
@@ -18,16 +18,16 @@ set -e
 # Resolve this script's own directory (follow symlinks) so the launcher is portable.
 SELF="${(%):-%x}"
 while [ -L "$SELF" ]; do SELF="$(readlink "$SELF")"; done
-PROXY_DIR="${CHATJIMMY_PROXY_DIR:-$(cd "$(dirname "$SELF")" && pwd)}"
+PROXY_DIR="${CLAUDBERGHINI_PROXY_DIR:-$(cd "$(dirname "$SELF")" && pwd)}"
 # deep-claude: env override, else on PATH, else the conventional sibling checkout.
 DC="${DEEP_CLAUDE_BIN:-$(command -v deep-claude || echo "$PROXY_DIR/../deep-claude/bin/deep-claude")}"
 SP="${PROXY_DIR}/llama-system-prompt.txt"
-MODEL="${CHATJIMMY_MODEL:-claude-3-5-sonnet-20241022}"
-ALLOWED="${CHATJIMMY_TOOLS:-Read,Write,Edit,Bash,Grep,Glob,LS}"
+MODEL="${CLAUDBERGHINI_MODEL:-claude-3-5-sonnet-20241022}"
+ALLOWED="${CLAUDBERGHINI_TOOLS:-Read,Write,Edit,Bash,Grep,Glob,LS}"
 
 # Ensure the proxy is up
 if ! curl -s http://localhost:3000/health >/dev/null 2>&1; then
-  echo "[chatjimmy-code] starting proxy..."
+  echo "[claudberghini] starting proxy..."
   (cd "$PROXY_DIR" && LOG_LEVEL=info node dist/server.js >/tmp/proxy-debug.log 2>&1 &)
   for i in {1..10}; do
     curl -s http://localhost:3000/health >/dev/null 2>&1 && break
@@ -35,7 +35,7 @@ if ! curl -s http://localhost:3000/health >/dev/null 2>&1; then
   done
 fi
 
-exec "$DC" --endpoint chatjimmy --model "$MODEL" --allowedTools "$ALLOWED" \
+exec "$DC" --endpoint claudberghini --model "$MODEL" --allowedTools "$ALLOWED" \
   -- --system-prompt-file "$SP" \
      --exclude-dynamic-system-prompt-sections \
      --strict-mcp-config \

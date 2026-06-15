@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" font-family="'JetBrains Mono', ui-monospace, monospace" role="img" aria-label="Tokens per second generating an HTML page: claudberghini ~14,500, Groq Llama-8B ~1,250, Claude Sonnet 4.5 ~52, Claude Opus 4.1 ~14">
+  <rect width="1000" height="420" fill="#f2eee2"/>
+  <text x="40" y="48" font-size="26" font-weight="600" fill="#1a1a18" font-family="'Newsreader', Georgia, serif">Tokens/sec generating an HTML page</text>
+  <text x="40" y="74" font-size="14" fill="#6b6555">Higher is faster. Log scale — each gridline is 10×.</text>
+
+  <!-- log gridlines: 10, 100, 1000, 10000 over x 230..960 -->
+  <g stroke="#d9d3c4" stroke-width="1" font-size="11" fill="#9a9382" text-anchor="middle">
+    <line x1="230" y1="100" x2="230" y2="350"/><text x="230" y="372">10</text>
+    <line x1="413" y1="100" x2="413" y2="350"/><text x="413" y="372">100</text>
+    <line x1="596" y1="100" x2="596" y2="350"/><text x="596" y="372">1,000</text>
+    <line x1="779" y1="100" x2="779" y2="350"/><text x="779" y="372">10,000</text>
+  </g>
+
+  <!-- bars: x start 230, width = (log10(v)-1)*183 ; rows at y -->
+  <g font-size="15" fill="#1a1a18">
+    <!-- claudberghini 14450 -> (4.16-1)*183=578 -> end 808 -->
+    <rect x="230" y="108" width="578" height="36" rx="4" fill="#c2410c"/>
+    <text x="40" y="131" font-weight="600">claudberghini</text>
+    <text x="818" y="131" font-weight="600" fill="#c2410c">~14,500 tok/s</text>
+
+    <!-- Groq 1250 -> (3.097-1)*183=384 -> end 614 -->
+    <rect x="230" y="158" width="384" height="36" rx="4" fill="#b08440"/>
+    <text x="40" y="181">Groq Llama-8B</text>
+    <text x="624" y="181" fill="#8a6a2f">~1,250 tok/s</text>
+
+    <!-- Sonnet 52 -> (1.716-1)*183=131 -> end 361 -->
+    <rect x="230" y="208" width="131" height="36" rx="4" fill="#7d8a70"/>
+    <text x="40" y="231">Claude Sonnet 4.5</text>
+    <text x="371" y="231" fill="#5f6a54">~52 tok/s</text>
+
+    <!-- Opus 14 -> (1.146-1)*183=27 -> end 257 -->
+    <rect x="230" y="258" width="27" height="36" rx="4" fill="#8a7d6a"/>
+    <text x="40" y="281">Claude Opus 4.1</text>
+    <text x="267" y="281" fill="#6b6150">~14 tok/s</text>
+  </g>
+
+  <text x="40" y="404" font-size="15" fill="#c2410c" font-weight="600">claudberghini is ~1,000× faster than Claude Opus at raw generation.</text>
+</svg>

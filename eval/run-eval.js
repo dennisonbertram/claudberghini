@@ -5,7 +5,7 @@
  *   node run-eval.js --config config.json   # config = {name, system, tools:[...]}
  *   node run-eval.js                         # uses a baseline config
  *
- * Runs every task REPEATS times against the ChatJimmy proxy and reports a JSON
+ * Runs every task REPEATS times against the Claudberghini proxy and reports a JSON
  * scorecard: per-task pass rate + overall score. Designed to be invoked by the
  * optimization workflow and have its stdout JSON parsed.
  *

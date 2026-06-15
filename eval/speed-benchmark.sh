@@ -1,10 +1,10 @@
 #!/bin/zsh
-# Speed benchmark: measure ChatJimmy's end-to-end agentic speed on real coding tasks.
+# Speed benchmark: measure Claudberghini's end-to-end agentic speed on real coding tasks.
 # Reports per-task wall-clock, model-time (duration_api_ms), and turns; plus raw decode rate.
-CJ=/Users/dennison/develop/chatjimmy-proxy/chatjimmy-code
+CJ=/Users/dennison/develop/claudberghini/claudberghini
 WS=/tmp/cj-bench; rm -rf "$WS"; mkdir -p "$WS"; cd "$WS"; git init -q 2>/dev/null
 
-echo "=== RAW ChatJimmy decode speed (3 samples) ==="
+echo "=== RAW Claudberghini decode speed (3 samples) ==="
 for p in "Write a haiku about code" "List 5 prime numbers" "Define recursion in one line"; do
   curl -s -X POST https://chatjimmy.ai/api/chat -H "Content-Type: application/json" \
     -d "$(python3 -c "import json,sys; print(json.dumps({'messages':[{'role':'user','content':sys.argv[1]}],'chatOptions':{'selectedModel':'llama3.1-8B','systemPrompt':'','topK':8},'attachment':None}))" "$p")" \

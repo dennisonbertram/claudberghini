@@ -1,11 +1,11 @@
-# ChatJimmy Config Optimizer
+# Claudberghini Config Optimizer
 
 An eval harness + hill-climbing optimizer that finds the best **(system prompt, tool subset)**
-combination for driving an agent loop on ChatJimmy's Llama 3.1 8B backend.
+combination for driving an agent loop on Claudberghini's Llama 3.1 8B backend.
 
 ## Why
 
-Claude Code's full ~32KB system prompt + 60 tools overwhelms ChatJimmy (which hard-caps input
+Claude Code's full ~32KB system prompt + 60 tools overwhelms Claudberghini (which hard-caps input
 at ~24KB) and a weak 8B tool-follower. With a *small, focused* prompt and a *minimal* toolset,
 the same model performs far better. This finds the sweet spot empirically.
 
@@ -29,13 +29,13 @@ EVAL_REPEATS=3 node run-eval.js --config my.json     # {name, system, tools:[...
 
 ## Optimize (workflow)
 
-The `optimize-chatjimmy-config` workflow hill-climbs:
+The `optimize-claudberghini-config` workflow hill-climbs:
 1. Evaluate baseline.
 2. Each round: 3 cheap **haiku** subagents propose distinct (system, tools) variants; 3 bash
    subagents run the eval in parallel; keep the best-of-beam if it beats the incumbent.
 3. Stop after 5 consecutive non-improving rounds (or 20 rounds).
 
-ChatJimmy/Llama-8B is the system-under-test (invoked by the harness via bash); only the
+Claudberghini/Llama-8B is the system-under-test (invoked by the harness via bash); only the
 proposer/judge orchestration uses paid models (haiku). A `/tmp/cj-watchdog.sh` keeps the proxy
 alive for the duration.
 

@@ -1,5 +1,5 @@
 {
-  "name": "chatjimmy-proxy",
+  "name": "claudberghini",
   "version": "1.0.0",
   "description": "A Node.js/TypeScript proxy server for format conversion and API request handling",
   "main": "dist/server.js",

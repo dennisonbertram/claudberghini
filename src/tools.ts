@@ -1,7 +1,7 @@
 /**
- * Tool-call translation layer for ChatJimmy (Llama 3.1 8B).
+ * Tool-call translation layer for Claudberghini (Llama 3.1 8B).
  *
- * ChatJimmy's /api/chat has no native `tools` parameter and Llama 3.1 8B does not
+ * Claudberghini's /api/chat has no native `tools` parameter and Llama 3.1 8B does not
  * emit native Anthropic tool_use blocks. So we:
  *   1. Inject tool definitions + STRICT formatting rules into the system prompt.
  *   2. Parse the model's text output for <tool_call>{...}</tool_call> patterns.
@@ -40,7 +40,7 @@ function nextToolUseId(): string {
  * Strong, explicit rules are essential — Llama 3.1 8B is a weak tool-follower by default.
  */
 // Compact a JSON schema down to the fields that matter for an 8B model, to fit
-// ChatJimmy's ~24KB input ceiling. Keeps param names, types, required flags, and
+// Claudberghini's ~24KB input ceiling. Keeps param names, types, required flags, and
 // short descriptions; drops $schema/$defs/additionalProperties/examples/etc.
 function compactSchema(schema?: AnthropicTool['input_schema']): string {
   if (!schema || !schema.properties) return '{}';

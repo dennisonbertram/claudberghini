@@ -1,6 +1,6 @@
 # Llama 3.1 8B Tool-Following Enhancement Guide
 
-This guide explains how the ChatJimmy proxy handles tool calling and how to improve its reliability based on latest research.
+This guide explains how the Claudberghini proxy handles tool calling and how to improve its reliability based on latest research.
 
 ## Problem: Llama 3.1 8B Tool-Following Baseline
 
