@@ -1,0 +1,238 @@
+{
+  "config": "production",
+  "backend": "claudberghini",
+  "model": "claude-3-5-sonnet-20241022",
+  "toolSampleAttempts": "(default 5)",
+  "answerSampleAttempts": "(default 3)",
+  "repeats": 12,
+  "durationSec": 39,
+  "overall": 0.592,
+  "categories": {
+    "read-extract": {
+      "passRate": 0.944,
+      "passed": 34,
+      "of": 36,
+      "tasks": 3,
+      "verdict": "RELIABLE",
+      "fail": {
+        "timeout": 2
+      }
+    },
+    "create-write": {
+      "passRate": 0.875,
+      "passed": 42,
+      "of": 48,
+      "tasks": 4,
+      "verdict": "MARGINAL",
+      "fail": {
+        "timeout": 3,
+        "wrong_answer": 3
+      }
+    },
+    "edit-inplace": {
+      "passRate": 0.35,
+      "passed": 21,
+      "of": 60,
+      "tasks": 5,
+      "verdict": "UNRELIABLE",
+      "fail": {
+        "timeout": 29,
+        "wrong_answer": 10
+      }
+    },
+    "search-find": {
+      "passRate": 0.639,
+      "passed": 23,
+      "of": 36,
+      "tasks": 3,
+      "verdict": "WEAK",
+      "fail": {
+        "wrong_answer": 4,
+        "timeout": 9
+      }
+    },
+    "count-analyze": {
+      "passRate": 0.313,
+      "passed": 15,
+      "of": 48,
+      "tasks": 4,
+      "verdict": "UNRELIABLE",
+      "fail": {
+        "timeout": 32,
+        "wrong_answer": 1
+      }
+    }
+  },
+  "perTask": {
+    "read-secret": {
+      "category": "read-extract",
+      "passRate": 1,
+      "passed": 12,
+      "of": 12,
+      "fail": {}
+    },
+    "create-file": {
+      "category": "create-write",
+      "passRate": 1,
+      "passed": 12,
+      "of": 12,
+      "fail": {}
+    },
+    "edit-version": {
+      "category": "edit-inplace",
+      "passRate": 1,
+      "passed": 12,
+      "of": 12,
+      "fail": {}
+    },
+    "grep-find": {
+      "category": "search-find",
+      "passRate": 0.833,
+      "passed": 10,
+      "of": 12,
+      "fail": {
+        "wrong_answer": 2
+      }
+    },
+    "count-lines": {
+      "category": "count-analyze",
+      "passRate": 0.417,
+      "passed": 5,
+      "of": 12,
+      "fail": {
+        "timeout": 7
+      }
+    },
+    "multi-edit": {
+      "category": "edit-inplace",
+      "passRate": 0,
+      "passed": 0,
+      "of": 12,
+      "fail": {
+        "timeout": 7,
+        "wrong_answer": 5
+      }
+    },
+    "read-json-field": {
+      "category": "read-extract",
+      "passRate": 0.917,
+      "passed": 11,
+      "of": 12,
+      "fail": {
+        "timeout": 1
+      }
+    },
+    "create-multiline": {
+      "category": "create-write",
+      "passRate": 0.833,
+      "passed": 10,
+      "of": 12,
+      "fail": {
+        "timeout": 1,
+        "wrong_answer": 1
+      }
+    },
+    "count-matches": {
+      "category": "count-analyze",
+      "passRate": 0.167,
+      "passed": 2,
+      "of": 12,
+      "fail": {
+        "timeout": 10
+      }
+    },
+    "replace-all": {
+      "category": "edit-inplace",
+      "passRate": 0.75,
+      "passed": 9,
+      "of": 12,
+      "fail": {
+        "wrong_answer": 3
+      }
+    },
+    "find-then-read": {
+      "category": "search-find",
+      "passRate": 0.167,
+      "passed": 2,
+      "of": 12,
+      "fail": {
+        "timeout": 9,
+        "wrong_answer": 1
+      }
+    },
+    "append-line": {
+      "category": "edit-inplace",
+      "passRate": 0,
+      "passed": 0,
+      "of": 12,
+      "fail": {
+        "timeout": 11,
+        "wrong_answer": 1
+      }
+    },
+    "most-lines": {
+      "category": "count-analyze",
+      "passRate": 0.417,
+      "passed": 5,
+      "of": 12,
+      "fail": {
+        "wrong_answer": 1,
+        "timeout": 6
+      }
+    },
+    "compare-values": {
+      "category": "count-analyze",
+      "passRate": 0.25,
+      "passed": 3,
+      "of": 12,
+      "fail": {
+        "timeout": 9
+      }
+    },
+    "delete-line": {
+      "category": "edit-inplace",
+      "passRate": 0,
+      "passed": 0,
+      "of": 12,
+      "fail": {
+        "timeout": 11,
+        "wrong_answer": 1
+      }
+    },
+    "create-json": {
+      "category": "create-write",
+      "passRate": 0.667,
+      "passed": 8,
+      "of": 12,
+      "fail": {
+        "wrong_answer": 2,
+        "timeout": 2
+      }
+    },
+    "create-readme": {
+      "category": "create-write",
+      "passRate": 1,
+      "passed": 12,
+      "of": 12,
+      "fail": {}
+    },
+    "read-kv": {
+      "category": "read-extract",
+      "passRate": 0.917,
+      "passed": 11,
+      "of": 12,
+      "fail": {
+        "timeout": 1
+      }
+    },
+    "which-file-token": {
+      "category": "search-find",
+      "passRate": 0.917,
+      "passed": 11,
+      "of": 12,
+      "fail": {
+        "wrong_answer": 1
+      }
+    }
+  }
+}

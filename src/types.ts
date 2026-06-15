@@ -3,6 +3,13 @@ export interface ProxyConfig {
   anthropicApiKey: string;
   proxyPort: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
+  // Real-Anthropic passthrough: requests whose model matches `passthroughMatch`
+  // (and only when anthropicApiKey is set) are forwarded verbatim to anthropicApiUrl
+  // instead of the Llama backend. Lets the same endpoint serve a real-Opus coordinator
+  // alongside cheap proxied-Llama sub-agents.
+  anthropicApiUrl: string;
+  anthropicVersion: string;
+  passthroughMatch: string;
 }
 
 export interface ConversionRequest {

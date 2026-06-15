@@ -1,14 +1,14 @@
 {
   "name": "claudberghini",
-  "version": "1.0.0",
-  "description": "A Node.js/TypeScript proxy server for format conversion and API request handling",
+  "version": "1.1.0",
+  "description": "Anthropic-API proxy that runs Claude Code on a fast Llama 3.1 8B backend, with a real-Anthropic Opus passthrough for hybrid coordination.",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --test",
+    "test": "node --import tsx --test test/*.test.ts",
     "lint": "tsc --noEmit"
   },
   "keywords": [
@@ -31,7 +31,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.10.6",
     "ts-node": "^10.9.2",
-    "tsx": "^4.7.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.3.3"
   },
   "engines": {
