@@ -1,41 +1,8 @@
-import axios, { AxiosError } from 'axios';
-import { APIRequest, APIResponse, ProxyConfig } from './types';
+import axios from 'axios';
+import { ProxyConfig } from './types';
 
 export class APIHandler {
   constructor(private config: ProxyConfig) {}
-
-  /**
-   * Handle proxied API requests to upstream services
-   */
-  async handleRequest(request: APIRequest): Promise<APIResponse> {
-    const timestamp = new Date().toISOString();
-
-    try {
-      this.log('info', `Processing ${request.method} request to ${request.endpoint}`);
-
-      const url = this.buildUrl(request.endpoint);
-      const headers = this.buildHeaders(request.headers);
-
-      const response = await axios({
-        method: request.method,
-        url,
-        headers,
-        data: request.body,
-        timeout: 30000,
-      });
-
-      this.log('info', `Request successful: ${response.status}`);
-
-      return {
-        status: response.status,
-        headers: response.headers as Record<string, string>,
-        body: response.data,
-        timestamp,
-      };
-    } catch (error) {
-      return this.handleError(error, timestamp);
-    }
-  }
 
   /**
    * Health check for the proxy server
@@ -65,54 +32,6 @@ export class APIHandler {
         error: errorMsg,
       };
     }
-  }
-
-  private buildUrl(endpoint: string): string {
-    const baseUrl = this.config.claudberghiniApiUrl.replace(/\/$/, '');
-    const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-    return `${baseUrl}${path}`;
-  }
-
-  private buildHeaders(customHeaders?: Record<string, string>): Record<string, string> {
-    const headers: Record<string, string> = {
-      'User-Agent': 'Claudberghini-Proxy/1.0.0',
-      'Content-Type': 'application/json',
-    };
-
-    if (this.config.anthropicApiKey) {
-      headers['Authorization'] = `Bearer ${this.config.anthropicApiKey}`;
-    }
-
-    return { ...headers, ...customHeaders };
-  }
-
-  private handleError(error: unknown, timestamp: string): APIResponse {
-    if (axios.isAxiosError(error)) {
-      const axiosError = error as AxiosError;
-      this.log('error', `API request failed: ${axiosError.message}`);
-
-      return {
-        status: axiosError.response?.status || 500,
-        headers: (axiosError.response?.headers as Record<string, string>) || {},
-        body: {
-          error: axiosError.message,
-          details: axiosError.response?.data,
-        },
-        timestamp,
-      };
-    }
-
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    this.log('error', `Unexpected error: ${errorMsg}`);
-
-    return {
-      status: 500,
-      headers: {},
-      body: {
-        error: errorMsg,
-      },
-      timestamp,
-    };
   }
 
   private log(level: string, message: string): void {

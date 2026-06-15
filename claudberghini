@@ -1,16 +1,19 @@
 #!/bin/zsh
-# claudberghini — run Claude Code on Claudberghini's Llama 3.1 8B backend, bare-basic.
+# claudberghini — Claude Code with a REAL Opus coordinator that delegates to a fast
+# Llama 3.1 8B backend.
 #
-# Bundles everything we found maximizes the weak model's performance:
-#   - routes through the Claudberghini proxy via deep-claude (--endpoint claudberghini)
-#   - replaces Claude Code's 120KB system prompt with our compact 2KB Llama prompt
-#   - no MCP servers (--strict-mcp-config), no skills (--disable-slash-commands)
-#   - no dynamic system-prompt sections
-#   - coding-only toolset
-# The proxy additionally strips <system-reminder> noise and injects the tool-call format.
+# Hybrid routing (handled by the proxy):
+#   - the main session runs on real Anthropic Opus (needs ANTHROPIC_API_KEY)
+#   - Workflow/Agent sub-agents that pick a non-opus model (sonnet/haiku/...) route to
+#     the proxied Llama 3.1 8B — Opus coordinates, Llama does the cheap fast implementation.
+# Opus gets the full Claude Code experience: normal system prompt, the Workflow tool, and
+# slash commands like /clear. Only when you pick a Llama model does the launcher fall back
+# to the compact-prompt "bare-basic" config that the weak model needs.
 #
+# Setup:  export ANTHROPIC_API_KEY=sk-ant-...   (for the real-Opus coordinator)
 # Usage:  claudberghini [extra claude args] -p "your task"
-#         claudberghini            # interactive
+#         claudberghini            # interactive (use /clear to restart a conversation)
+#         CLAUDBERGHINI_MODEL=claude-sonnet-4-6 claudberghini   # run the whole session on Llama
 # Run it from the project directory you want to work in (Claude Code sandboxes tools to cwd).
 
 set -e
@@ -22,24 +25,46 @@ PROXY_DIR="${CLAUDBERGHINI_PROXY_DIR:-$(cd "$(dirname "$SELF")" && pwd)}"
 # deep-claude: env override, else on PATH, else the conventional sibling checkout.
 DC="${DEEP_CLAUDE_BIN:-$(command -v deep-claude || echo "$PROXY_DIR/../deep-claude/bin/deep-claude")}"
 SP="${PROXY_DIR}/llama-system-prompt.txt"
-MODEL="${CLAUDBERGHINI_MODEL:-claude-3-5-sonnet-20241022}"
-ALLOWED="${CLAUDBERGHINI_TOOLS:-Read,Write,Edit,Bash,Grep,Glob,LS}"
+# Default to real Opus (the coordinator). Pick a non-opus model to run entirely on Llama.
+MODEL="${CLAUDBERGHINI_MODEL:-claude-opus-4-8}"
+# Coding tools + Workflow/Agent so Opus can orchestrate the proxied model.
+ALLOWED="${CLAUDBERGHINI_TOOLS:-Read,Write,Edit,Bash,Grep,Glob,LS,Workflow,Agent,TodoWrite}"
 
 # Ensure the proxy is up. All status output goes to stderr so it never pollutes
 # `claudberghini -p ... --output-format json` on stdout.
 if ! curl -s http://localhost:3000/health >/dev/null 2>&1; then
   echo "[claudberghini] starting proxy..." >&2
-  (cd "$PROXY_DIR" && LOG_LEVEL=info node dist/server.js >/tmp/proxy-debug.log 2>&1 &)
+  # The proxy inherits this shell's env, so ANTHROPIC_API_KEY (if exported) reaches it.
+  # Log to the proxy directory (not world-readable /tmp) so output stays private.
+  (cd "$PROXY_DIR" && LOG_LEVEL=info node dist/server.js >"$PROXY_DIR/proxy.log" 2>&1 &)
   for i in {1..20}; do
     curl -s http://localhost:3000/health >/dev/null 2>&1 && break
     sleep 0.5
   done
 fi
 
-exec "$DC" --endpoint claudberghini --model "$MODEL" --allowedTools "$ALLOWED" \
-  -- --system-prompt-file "$SP" \
-     --exclude-dynamic-system-prompt-sections \
-     --strict-mcp-config \
-     --disable-slash-commands \
-     --setting-sources project \
-     "$@"
+if [[ "$MODEL" == *opus* ]]; then
+  # Hybrid coordinator mode: real Opus with the full Claude Code experience.
+  # Warn if the running proxy can't actually reach Anthropic (no key) — it would
+  # silently fall back to Llama for the main session.
+  if ! curl -s http://localhost:3000/config 2>/dev/null | grep -q '"passthroughEnabled":true'; then
+    echo "[claudberghini] WARNING: model '$MODEL' needs real Anthropic, but the proxy has no" >&2
+    echo "[claudberghini]          ANTHROPIC_API_KEY configured — the session will fall back to Llama." >&2
+    echo "[claudberghini]          Export ANTHROPIC_API_KEY and restart the proxy (kill PID on :3000)." >&2
+  fi
+  exec "$DC" --endpoint claudberghini --model "$MODEL" --allowedTools "$ALLOWED" \
+    -- --strict-mcp-config \
+       --setting-sources project \
+       "$@"
+else
+  # Pure-Llama "bare-basic" mode: the weak model needs the compact system prompt, no dynamic
+  # sections, and no slash commands. The proxy strips <system-reminder> noise and injects
+  # the tool-call format on the Llama path.
+  exec "$DC" --endpoint claudberghini --model "$MODEL" --allowedTools "$ALLOWED" \
+    -- --system-prompt-file "$SP" \
+       --exclude-dynamic-system-prompt-sections \
+       --strict-mcp-config \
+       --disable-slash-commands \
+       --setting-sources project \
+       "$@"
+fi

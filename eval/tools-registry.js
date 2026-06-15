@@ -6,7 +6,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 // Full schema definitions. A config picks a subset by name.
 const TOOL_SCHEMAS = {
@@ -88,9 +88,13 @@ function getToolSchemas(names) {
 }
 
 // Safe-ish path resolution constrained to the workspace.
+// Uses a separator-aware boundary check so a sibling dir sharing the workspace
+// prefix (e.g. /tmp/cjeval-foo vs /tmp/cjeval-foobar) cannot escape.
 function resolveIn(workspace, p) {
+  const base = path.resolve(workspace);
   const full = path.resolve(workspace, p || '.');
-  if (!full.startsWith(path.resolve(workspace))) {
+  const rel = path.relative(base, full);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error('path escapes workspace');
   }
   return full;
@@ -126,19 +130,29 @@ function makeExecutor(workspace) {
           return out.slice(0, 4000) || '(no output)';
         }
         case 'Grep': {
+          // Pattern is passed as an argv element — never shell-evaluated.
           try {
-            const out = execSync(`grep -rn ${JSON.stringify(input.pattern)} .`, { cwd: workspace, timeout: 10000, encoding: 'utf8' });
+            const out = execFileSync('grep', ['-rn', String(input.pattern ?? ''), '.'], { cwd: workspace, timeout: 10000, encoding: 'utf8' });
             return out.slice(0, 4000) || '(no matches)';
           } catch {
             return '(no matches)';
           }
         }
         case 'Glob': {
-          const out = execSync(`ls -1 ${input.pattern} 2>/dev/null || find . -name ${JSON.stringify((input.pattern || '').replace(/\*\*\//g, ''))}`, { cwd: workspace, timeout: 10000, encoding: 'utf8' });
-          return out.slice(0, 4000) || '(no files)';
+          // Strip leading **/ and pass the basename pattern as an argv element to find.
+          // No shell is involved so the user-supplied pattern cannot be injected.
+          const basenamePattern = (input.pattern || '').replace(/^\*\*\//, '');
+          try {
+            const out = execFileSync('find', ['.', '-name', basenamePattern], { cwd: workspace, timeout: 10000, encoding: 'utf8' });
+            return out.slice(0, 4000) || '(no files)';
+          } catch {
+            return '(no files)';
+          }
         }
         case 'LS': {
-          const out = execSync(`ls -la ${input.path || '.'}`, { cwd: workspace, timeout: 10000, encoding: 'utf8' });
+          // Resolve and validate the target directory before passing it to execFileSync.
+          const resolvedDir = resolveIn(workspace, input.path || '.');
+          const out = execFileSync('ls', ['-la', resolvedDir], { timeout: 10000, encoding: 'utf8' });
           return out.slice(0, 4000);
         }
         default:

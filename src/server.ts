@@ -1,9 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import { ProxyConfig } from './types';
-import { FormatConverter } from './converter';
 import { APIHandler } from './handlers';
 import {
   buildToolSystemPrompt,
@@ -12,6 +10,18 @@ import {
   AnthropicTool,
   ParsedOutput,
 } from './tools';
+import {
+  flattenContent,
+  groundingScore,
+  priorToolResultText,
+  lastMessageIsToolResult,
+  guardToolUse,
+  trimSystemPromptToBytes,
+  isPassthroughModel,
+  buildToolDefMap,
+  coerceToolInput,
+  ToolDef,
+} from './transform';
 
 // Load environment variables
 dotenv.config();
@@ -22,6 +32,11 @@ const config: ProxyConfig = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
   proxyPort: parseInt(process.env.PROXY_PORT || '3000', 10),
   logLevel: (process.env.LOG_LEVEL as 'debug' | 'info' | 'warn' | 'error') || 'info',
+  anthropicApiUrl: process.env.ANTHROPIC_API_URL || 'https://api.anthropic.com',
+  anthropicVersion: process.env.ANTHROPIC_VERSION || '2023-06-01',
+  // Models matching this (case-insensitive regex) route to real Anthropic when a key is set.
+  // Default 'opus' → the coordinator runs on real Opus; sonnet/haiku sub-agents stay on Llama.
+  passthroughMatch: process.env.ANTHROPIC_PASSTHROUGH_MATCH || 'opus',
 };
 
 // Model mapping: Anthropic model names to Claudberghini model names
@@ -90,7 +105,8 @@ const app: Express = express();
 const apiHandler = new APIHandler(config);
 
 // Middleware
-app.use(cors());
+// cors() is intentionally omitted: this is a local loopback API (127.0.0.1 only)
+// and reflecting arbitrary origins would allow any browser tab to call it.
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
@@ -102,38 +118,13 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 });
 
 // Conversion helper functions
+// Pure helpers (flattenContent, groundingScore, priorToolResultText,
+// lastMessageIsToolResult, guardToolUse, trimSystemPromptToBytes) are
+// imported from ./transform — see that file for full documentation.
 
 /**
  * Convert Anthropic format request to Claudberghini format
  */
-// Flatten Anthropic content (string OR array of content blocks) into a plain string.
-// Claude Code sends system + message content as arrays of {type:'text', text:'...'} blocks
-// (often with cache_control), and tool_result/tool_use blocks. Claudberghini needs plain strings.
-function flattenContent(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((block: any) => {
-        if (typeof block === 'string') return block;
-        if (block?.type === 'text' && typeof block.text === 'string') return block.text;
-        if (block?.type === 'tool_result') {
-          // Format tool results as an explicit observation so the model distinguishes
-          // tool feedback from user input (per Hermes/UniClaudeProxy convention).
-          const inner = flattenContent(block.content);
-          return `<tool_response>\n${inner}\n</tool_response>`;
-        }
-        if (block?.type === 'tool_use') {
-          // Replay past tool calls in the SAME format the model is told to emit,
-          // to avoid format drift across turns.
-          return `<tool_call>${JSON.stringify({ name: block.name, input: block.input ?? {} })}</tool_call>`;
-        }
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n');
-  }
-  return '';
-}
 
 // Core coding toolset advertised to the (weak) Llama 3.1 8B model. Claude Code sends
 // ~60 tools (many noisy mcp__* / orchestration tools) which bloat Claudberghini's tiny
@@ -228,18 +219,12 @@ function convertAnthropicToClaudberghini(req: AnthropicRequest): ClaudberghiniRe
   }
 
   // Claudberghini hard-caps input around ~24KB (returns empty above it). Budget the
-  // system prompt so system + messages stay under that ceiling. Keep the head
-  // (core instructions + tool defs) and tail (most recent guidance), drop the middle.
+  // system prompt so system + messages stay under that ceiling.
+  // trimSystemPromptToBytes measures in UTF-8 bytes (not chars) and keeps the head
+  // (core instructions + tool defs) and tail (most-recent guidance), dropping the middle.
   const MAX_SYSTEM_BYTES = Number(process.env.MAX_SYSTEM_BYTES) || 18000;
-  if (systemPrompt && systemPrompt.length > MAX_SYSTEM_BYTES) {
-    const head = Math.floor(MAX_SYSTEM_BYTES * 0.7);
-    const tail = MAX_SYSTEM_BYTES - head;
-    const original = systemPrompt.length;
-    systemPrompt =
-      systemPrompt.slice(0, head) +
-      `\n\n[...${original - MAX_SYSTEM_BYTES} chars trimmed to fit context...]\n\n` +
-      systemPrompt.slice(original - tail);
-    console.warn(`[WARN] System prompt trimmed ${original} -> ${systemPrompt.length} bytes to fit Claudberghini context`);
+  if (systemPrompt) {
+    systemPrompt = trimSystemPromptToBytes(systemPrompt, MAX_SYSTEM_BYTES);
   }
 
   const chatOptions: ClaudberghiniChatOptions = {
@@ -314,6 +299,52 @@ function convertClaudberghiniToAnthropic(
   };
 }
 
+/**
+ * Return the index of the first Llama control token in `raw`, or raw.length if
+ * none is present. We match only the known finite set of trailers so that
+ * legitimate content containing the two-character digraph `<|` (e.g. a code
+ * snippet with a bitwise-OR expression) is not incorrectly truncated.
+ *
+ * Matched tokens: <|stats|>  <|eot_id|>  <|end_of_text|>  <|eom_id|>
+ * (The <|stats|>…<|/stats|> wrapper always starts with <|stats|>, so one
+ * check covers the whole trailer.)
+ */
+export function contentEndIndex(raw: string): number {
+  const CONTROL_TOKENS = ['<|stats|>', '<|eot_id|>', '<|end_of_text|>', '<|eom_id|>'];
+  let first = raw.length;
+  for (const tok of CONTROL_TOKENS) {
+    const idx = raw.indexOf(tok);
+    if (idx !== -1 && idx < first) first = idx;
+  }
+  return first;
+}
+
+/**
+ * Return the index where a trailing partial control-token prefix begins, or
+ * raw.length if no prefix is found.  This lets the streaming path hold back
+ * bytes that might be the beginning of a split control token.
+ *
+ * Example: raw ends with 'Hello<|sta' — we return the index of '<' so the
+ * caller withholds '<|sta' until the next chunk arrives and contentEndIndex
+ * can match the complete '<|stats|>' token.
+ */
+export function startOfTrailingTokenPrefix(raw: string): number {
+  const CONTROL_TOKENS = ['<|stats|>', '<|eot_id|>', '<|end_of_text|>', '<|eom_id|>'];
+  // Check progressively shorter suffixes of raw against token prefixes.
+  // We only need to check up to max-token-length characters from the end.
+  const maxTokLen = Math.max(...CONTROL_TOKENS.map((t) => t.length));
+  const checkFrom = Math.max(0, raw.length - maxTokLen);
+  for (let i = checkFrom; i < raw.length; i++) {
+    const suffix = raw.slice(i);
+    for (const tok of CONTROL_TOKENS) {
+      if (tok.startsWith(suffix) && suffix.length > 0 && suffix.length < tok.length) {
+        return i; // raw ends with a non-empty, non-complete prefix of tok
+      }
+    }
+  }
+  return raw.length; // no trailing prefix found
+}
+
 // Strip Claudberghini control tokens from a raw response body.
 function cleanClaudberghiniText(content: string): string {
   return content
@@ -358,53 +389,6 @@ async function callClaudberghiniText(claudberghiniRequest: ClaudberghiniRequest)
   return cleanClaudberghiniText(String(content));
 }
 
-// Does the last message carry a tool_result (i.e. the model should now produce a final
-// answer, not necessarily another tool call)?
-function lastMessageIsToolResult(req: AnthropicRequest): boolean {
-  const m = req.messages[req.messages.length - 1];
-  if (!m || !Array.isArray(m.content)) return false;
-  return (m.content as any[]).some((b) => b && b.type === 'tool_result');
-}
-
-// Extract the text of prior tool results from the (already-flattened) Claudberghini messages.
-// Used to ground final answers against what tools actually returned.
-function priorToolResultText(claudberghiniRequest: ClaudberghiniRequest): string {
-  const all = claudberghiniRequest.messages.map((m) => m.content).join('\n');
-  const matches = all.match(/<tool_response>[\s\S]*?<\/tool_response>/g);
-  return matches ? matches.join('\n') : '';
-}
-
-// Fraction of an answer's significant tokens that actually appear in the reference
-// (the tool output). Higher = more grounded, less hallucinated.
-function groundingScore(answer: string, reference: string): number {
-  if (!reference) return 0;
-  const ref = reference.toLowerCase();
-  const tokens = answer.toLowerCase().match(/[a-z0-9_./-]{4,}/g) || [];
-  if (tokens.length === 0) return 0;
-  let hit = 0;
-  for (const t of tokens) if (ref.includes(t)) hit++;
-  return hit / tokens.length;
-}
-
-// Block destructive / privileged shell commands the weak model sometimes hallucinates.
-// Returns the tool use if safe, or null if it should be refused.
-function guardToolUse(tu: any): any | null {
-  if (!tu) return null;
-  if (tu.name === 'Bash') {
-    const cmd = String(tu.input?.command || '');
-    const DANGER = [
-      /\bsudo\b/, /\brm\s+-[a-z]*\s*\//, /\brm\s+-rf\b/, /\bmkfs\b/, /\bdd\s+if=/,
-      /\bof=\/dev\//, />\s*\/dev\/sd/, /:\(\)\s*\{/, /\bchmod\s+-R\s+777\s+\//,
-      /\bchown\s+-R\b.*\s\//, /\/etc\/(passwd|shadow|hosts|sudoers)/, /\bshutdown\b/,
-      /\breboot\b/, /\bcurl\b[^|]*\|\s*(sh|bash)\b/, /\bwget\b[^|]*\|\s*(sh|bash)\b/,
-    ];
-    if (DANGER.some((re) => re.test(cmd))) {
-      console.log(`[WARN] BLOCKED dangerous Bash command: ${cmd.slice(0, 120)}`);
-      return null;
-    }
-  }
-  return tu;
-}
 
 // Best-of-N sampling: Claudberghini is fast + non-deterministic.
 //   - valid tool call → use it (first call only; drop any fabricated continuation).
@@ -418,17 +402,22 @@ async function sampleToolResponse(
   claudberghiniRequest: ClaudberghiniRequest,
   toolNames: Set<string>,
   groundAgainstTools: boolean,
-  maxAttempts: number
+  maxAttempts: number,
+  toolDefs: Record<string, ToolDef> = {}
 ): Promise<ParsedOutput> {
   let last: ParsedOutput = { text: '', toolUses: [] as any[] };
   const reference = groundAgainstTools ? priorToolResultText(claudberghiniRequest) : '';
   const answerCandidates: ParsedOutput[] = [];
+  let successfulCalls = 0;
+  let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let text = '';
     try {
       text = await callClaudberghiniText(claudberghiniRequest);
+      successfulCalls++;
     } catch (e) {
+      lastError = e;
       continue; // transient — try again
     }
     const parsed = parseToolCalls(text, toolNames) as ParsedOutput;
@@ -436,7 +425,13 @@ async function sampleToolResponse(
 
     if (parsed.toolUses.length > 0) {
       if (attempt > 0) console.log(`[INFO] best-of-N: clean tool call on attempt ${attempt + 1}`);
-      const safe = guardToolUse(parsed.toolUses[0]);
+      // Repair bare-string inputs (e.g. Bash input emitted as a raw command string) BEFORE
+      // guarding, so the guard sees the real command and the tool receives a valid object.
+      const coerced = coerceToolInput(parsed.toolUses[0], toolDefs);
+      if (coerced !== parsed.toolUses[0]) {
+        console.log(`[INFO] coerced bare-string input for tool ${coerced.name}`);
+      }
+      const safe = guardToolUse(coerced);
       if (!safe) {
         return { text: 'I cannot run that — it looks unsafe (destructive or privileged command).', toolUses: [] };
       }
@@ -463,6 +458,16 @@ async function sampleToolResponse(
     }
     return best;
   }
+
+  // If every attempt threw (zero successful model calls), propagate the last error
+  // so callers turn it into a proper 500 / streaming error frame instead of an
+  // empty-200 that silently masks backend outage.
+  if (successfulCalls === 0) {
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(String(lastError ?? 'All model sampling attempts failed'));
+  }
+
   return last;
 }
 
@@ -472,6 +477,76 @@ async function sampleToolResponse(
  * Anthropic-compatible POST /v1/messages endpoint
  * Converts Anthropic format to Claudberghini format, proxies request, converts response back
  */
+// Forward a request VERBATIM to the real Anthropic Messages API (no Llama massaging:
+// no tool-injection, no prompt-compaction, no <system-reminder> stripping). Used for the
+// real-Opus coordinator. Preserves streaming, status codes, and error bodies end-to-end.
+async function handleAnthropicPassthrough(req: Request, res: Response, startTime: number): Promise<void> {
+  const url = `${config.anthropicApiUrl.replace(/\/$/, '')}/v1/messages`;
+  const isStream = (req.body as AnthropicRequest)?.stream === true;
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'x-api-key': config.anthropicApiKey,
+    'anthropic-version': (req.headers['anthropic-version'] as string) || config.anthropicVersion,
+  };
+  // Forward beta opt-ins (e.g. compaction, task budgets) so the coordinator keeps its features.
+  const beta = req.headers['anthropic-beta'];
+  if (beta) headers['anthropic-beta'] = Array.isArray(beta) ? beta.join(',') : String(beta);
+
+  try {
+    if (isStream) {
+      const upstream = await axios.post(url, req.body, {
+        responseType: 'stream',
+        timeout: 120000,
+        headers,
+        validateStatus: () => true,
+        maxBodyLength: Infinity,
+        // The key rides in x-api-key, which follow-redirects does NOT strip cross-domain
+        // (only Authorization/Cookie). Anthropic's API never 3xx-redirects, so refuse to
+        // follow one rather than risk forwarding the key to a redirect target.
+        maxRedirects: 0,
+      });
+      res.status(upstream.status);
+      const ct = upstream.headers['content-type'];
+      if (ct) res.setHeader('Content-Type', String(ct));
+      res.setHeader('Cache-Control', 'no-cache');
+      upstream.data.on('error', (e: Error) => {
+        console.error(`[ERROR] Anthropic passthrough stream error: ${e.message}`);
+        if (!res.writableEnded) res.end();
+      });
+      // If the client hangs up mid-stream, tear down the upstream request so we stop
+      // pulling (and billing) tokens from Anthropic.
+      res.on('close', () => {
+        if (!upstream.data.destroyed) upstream.data.destroy();
+      });
+      upstream.data.pipe(res);
+      upstream.data.on('end', () => {
+        console.log(`[INFO] Passthrough(stream) → Anthropic completed in ${Date.now() - startTime}ms (HTTP ${upstream.status})`);
+      });
+    } else {
+      const upstream = await axios.post(url, req.body, {
+        timeout: 120000,
+        headers,
+        validateStatus: () => true,
+        maxBodyLength: Infinity,
+        maxRedirects: 0, // never follow a redirect carrying the x-api-key (see streaming branch)
+      });
+      console.log(`[INFO] Passthrough → Anthropic completed in ${Date.now() - startTime}ms (HTTP ${upstream.status})`);
+      res.status(upstream.status).json(upstream.data);
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[ERROR] Anthropic passthrough failed: ${errorMsg}`);
+    if (!res.headersSent) {
+      res.status(502).json({
+        type: 'error',
+        error: { type: 'api_error', message: `Anthropic passthrough failed: ${errorMsg}` },
+      });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  }
+}
+
 app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
   const timestamp = new Date().toISOString();
   const startTime = Date.now();
@@ -506,6 +581,22 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
     console.log(`[DEBUG] Messages count: ${anthropicRequest.messages.length}`);
     console.log(`[DEBUG] Stream: ${anthropicRequest.stream || false}`);
 
+    // ROUTER: real-Anthropic passthrough vs proxied Llama.
+    // A model matching passthroughMatch (default /opus/i) routes to real Anthropic when a
+    // key is configured — the coordinator brain. Everything else (sonnet/haiku/...) falls
+    // through to the fast Llama path below — the cheap delegated hands.
+    const wantsPassthrough = isPassthroughModel(anthropicRequest.model, config.passthroughMatch);
+    if (wantsPassthrough && config.anthropicApiKey) {
+      console.log(`[INFO] → real Anthropic passthrough (model: ${anthropicRequest.model})`);
+      await handleAnthropicPassthrough(req, res, startTime);
+      return;
+    }
+    if (wantsPassthrough && !config.anthropicApiKey) {
+      console.warn(
+        `[WARN] Model "${anthropicRequest.model}" matches passthrough pattern but ANTHROPIC_API_KEY is not set — falling back to the Llama backend. Set ANTHROPIC_API_KEY to use real Anthropic.`
+      );
+    }
+
     // Convert to Claudberghini format
     const claudberghiniRequest = convertAnthropicToClaudberghini(anthropicRequest);
     console.log(`[DEBUG] Converted to Claudberghini format with model: ${claudberghiniRequest.chatOptions.selectedModel}`);
@@ -517,6 +608,8 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
     // Valid tool names for this request (used to parse tool calls from model output)
     const toolNames = new Set((anthropicRequest.tools ?? []).map((t) => t.name));
     const hasTools = toolNames.size > 0;
+    // Param-name map for repairing bare-string tool inputs from the weak model.
+    const toolDefs = buildToolDefMap(anthropicRequest.tools);
     if (hasTools) {
       console.log(`[DEBUG] Tools enabled: ${[...toolNames].join(', ')}`);
     }
@@ -572,7 +665,7 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
           const maxAttempts = groundAgainstTools
             ? Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 3)
             : Number(process.env.TOOL_SAMPLE_ATTEMPTS || 5);
-          const parsed = await sampleToolResponse(claudberghiniRequest, toolNames, groundAgainstTools, maxAttempts);
+          const parsed = await sampleToolResponse(claudberghiniRequest, toolNames, groundAgainstTools, maxAttempts, toolDefs);
 
           if (parsed.text) {
             sendEvent('content_block_delta', {
@@ -634,15 +727,15 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
         axiosResponse.data.on('data', (chunk: Buffer) => {
           raw += chunk.toString();
 
-          // When tools are enabled we must buffer the full output — a tool call cannot
-          // be emitted until we've seen the complete <tool_call>{...}</tool_call>. So
-          // only stream incremental text deltas in the no-tools case.
-          if (hasTools) return;
-
-          // Find the first control token (<|stats|>, <|eot_id|>, etc.) — content ends there
-          const ctrlIdx = raw.indexOf('<|');
-          // If no control token seen yet, hold back the last char in case '<|' is split across chunks
-          const safeEnd = ctrlIdx >= 0 ? ctrlIdx : Math.max(emitted, raw.length - 1);
+          // Find the first known control token — content ends there.
+          // contentEndIndex matches only the finite set of Llama trailers, so a
+          // legitimate '<|' digraph in content (e.g. code) is not truncated.
+          const ctrlIdx = contentEndIndex(raw);
+          // If no complete control token is found yet, also hold back any trailing
+          // partial control-token prefix so it isn't emitted prematurely when the
+          // token is split across two stream chunks (e.g. 'Hello<|sta' + 'ts|>...').
+          const prefixStart = ctrlIdx < raw.length ? raw.length : startOfTrailingTokenPrefix(raw);
+          const safeEnd = ctrlIdx < raw.length ? ctrlIdx : Math.max(emitted, Math.min(raw.length - 1, prefixStart));
 
           if (safeEnd > emitted) {
             const text = raw.slice(emitted, safeEnd);
@@ -662,67 +755,10 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
           if (streamClosed) return;
           streamClosed = true;
 
-          // Clean full text (strip control tokens / stats trailer)
-          const cleanFull = raw
-            .replace(/<\|stats\|>[\s\S]*?<\|\/stats\|>/g, '')
-            .replace(/<\|[^|]*\|>/g, '')
-            .trim();
-
-          if (hasTools) {
-            if (process.env.LOG_LEVEL === 'debug') {
-              console.log(`[DEBUG] RAW model output (${cleanFull.length} chars): ${JSON.stringify(cleanFull.slice(0, 500))}`);
-            }
-            // Parse tool calls from the buffered output and emit a structured sequence.
-            const parsed = parseToolCalls(cleanFull, toolNames);
-
-            // Text block (index 0 was already opened in the preamble)
-            if (parsed.text) {
-              sendEvent('content_block_delta', {
-                type: 'content_block_delta',
-                index: 0,
-                delta: { type: 'text_delta', text: parsed.text },
-              });
-              outputTokenEstimate += Math.ceil(parsed.text.length / 4);
-            }
-            sendEvent('content_block_stop', { type: 'content_block_stop', index: 0 });
-
-            // One tool_use block per parsed call
-            parsed.toolUses.forEach((tu, i) => {
-              const index = i + 1;
-              sendEvent('content_block_start', {
-                type: 'content_block_start',
-                index,
-                content_block: { type: 'tool_use', id: tu.id, name: tu.name, input: {} },
-              });
-              sendEvent('content_block_delta', {
-                type: 'content_block_delta',
-                index,
-                delta: { type: 'input_json_delta', partial_json: JSON.stringify(tu.input ?? {}) },
-              });
-              sendEvent('content_block_stop', { type: 'content_block_stop', index });
-            });
-
-            sendEvent('message_delta', {
-              type: 'message_delta',
-              delta: {
-                stop_reason: parsed.toolUses.length > 0 ? 'tool_use' : 'end_turn',
-                stop_sequence: null,
-              },
-              usage: { output_tokens: outputTokenEstimate },
-            });
-            sendEvent('message_stop', { type: 'message_stop' });
-            res.end();
-
-            const duration = Date.now() - startTime;
-            console.log(
-              `[INFO] Streaming(tools) completed in ${duration}ms — ${parsed.toolUses.length} tool call(s)`
-            );
-            return;
-          }
-
-          // No tools: flush any remaining clean text (held-back tail)
-          const ctrlIdx = raw.indexOf('<|');
-          const finalEnd = ctrlIdx >= 0 ? ctrlIdx : raw.length;
+          // No tools: flush any remaining clean text (held-back tail).
+          // Use contentEndIndex so we match only known Llama control tokens.
+          const ctrlIdx = contentEndIndex(raw);
+          const finalEnd = ctrlIdx;
           if (finalEnd > emitted) {
             const text = raw.slice(emitted, finalEnd);
             if (text) {
@@ -776,7 +812,7 @@ app.post('/v1/messages', async (req: Request, res: Response): Promise<void> => {
           const maxAttempts = groundAgainstTools
             ? Number(process.env.ANSWER_SAMPLE_ATTEMPTS || 3)
             : Number(process.env.TOOL_SAMPLE_ATTEMPTS || 5);
-          const parsed = await sampleToolResponse(claudberghiniRequest, toolNames, groundAgainstTools, maxAttempts);
+          const parsed = await sampleToolResponse(claudberghiniRequest, toolNames, groundAgainstTools, maxAttempts, toolDefs);
           const blocks = buildContentBlocks(parsed);
           const hasToolUse = parsed.toolUses.length > 0;
           anthropicResponse = {
@@ -873,78 +909,6 @@ app.get('/health/upstream', async (_req: Request, res: Response) => {
 });
 
 /**
- * Format conversion endpoint
- * POST /convert
- * Body: { sourceFormat, targetFormat, data, options }
- */
-app.post('/convert', (req: Request, res: Response): void => {
-  try {
-    const { sourceFormat, targetFormat, data, options } = req.body;
-
-    if (!sourceFormat || !targetFormat || data === undefined) {
-      res.status(400).json({
-        success: false,
-        error: 'Missing required fields: sourceFormat, targetFormat, data',
-      });
-      return;
-    }
-
-    const result = FormatConverter.convert({
-      sourceFormat,
-      targetFormat,
-      data,
-      options,
-    });
-
-    const statusCode = result.success ? 200 : 400;
-    res.status(statusCode).json(result);
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
-
-/**
- * Proxy API request endpoint
- * POST /proxy
- * Body: { method, endpoint, headers, body }
- */
-app.post('/proxy', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { method, endpoint, headers, body } = req.body;
-
-    if (!method || !endpoint) {
-      res.status(400).json({
-        error: 'Missing required fields: method, endpoint',
-      });
-      return;
-    }
-
-    const response = await apiHandler.handleRequest({
-      method,
-      endpoint,
-      headers,
-      body,
-    });
-
-    res.status(response.status).json({
-      status: response.status,
-      headers: response.headers,
-      body: response.body,
-      timestamp: response.timestamp,
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: error instanceof Error ? error.message : 'Unknown error',
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
-
-/**
  * GET /config (returns non-sensitive config info)
  */
 app.get('/config', (_req: Request, res: Response) => {
@@ -953,6 +917,9 @@ app.get('/config', (_req: Request, res: Response) => {
     proxyPort: config.proxyPort,
     logLevel: config.logLevel,
     upstreamKeyConfigured: !!config.anthropicApiKey,
+    anthropicApiUrl: config.anthropicApiUrl,
+    passthroughMatch: config.passthroughMatch,
+    passthroughEnabled: !!config.anthropicApiKey,
   });
 });
 
@@ -978,8 +945,8 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void =>
   });
 });
 
-// Start server
-const server = app.listen(config.proxyPort, () => {
+// Start server — bind to loopback only; this is a local API, not a public service.
+const server = app.listen(config.proxyPort, '127.0.0.1', () => {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║   Claudberghini Anthropic Proxy Server                         ║
@@ -994,8 +961,6 @@ Available Endpoints:
   GET  /health/upstream       - Upstream connectivity check
   GET  /config                - Server configuration (non-sensitive)
   POST /v1/messages           - Anthropic-compatible message endpoint (converts to Claudberghini)
-  POST /convert               - Format conversion
-  POST /proxy                 - Proxy API requests
 
 Supported Models (mapped to Claudberghini):
   - gpt-4, gpt-4-turbo, gpt-4o → llama3.1-8B

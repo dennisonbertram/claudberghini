@@ -102,44 +102,166 @@ After the tool output comes back, parse it carefully, extract the exact value re
 }
 
 /**
- * Attempt to repair common malformed-JSON issues from small models.
+ * Strip trailing commas (`,` immediately before `}` or `]`) that are OUTSIDE
+ * string literals. A naive regex over the whole string corrupts values that
+ * legitimately contain the substrings ",}" or ",]".
  */
-function repairJson(raw: string): Record<string, any> | null {
+function stripTrailingCommas(s: string): string {
+  let out = '';
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (esc) { out += ch; esc = false; continue; }
+    if (inStr) {
+      if (ch === '\\') { out += ch; esc = true; continue; }
+      if (ch === '"') inStr = false;
+      out += ch;
+      continue;
+    }
+    // Outside a string: check for a comma that is immediately followed (ignoring
+    // whitespace) by a closing brace or bracket.
+    if (ch === '"') { inStr = true; out += ch; continue; }
+    if (ch === ',') {
+      // Peek ahead past whitespace
+      let j = i + 1;
+      while (j < s.length && (s[j] === ' ' || s[j] === '\t' || s[j] === '\n' || s[j] === '\r')) j++;
+      if (j < s.length && (s[j] === '}' || s[j] === ']')) {
+        // Drop this comma; do NOT add it to `out`
+        continue;
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Convert single-quoted JSON to double-quoted JSON, handling:
+ *   - Single-quote string delimiters → double quotes
+ *   - Literal double quotes inside single-quoted spans → escaped \"
+ *   - Apostrophes inside double-quoted spans are left alone
+ * This is intentionally structural (char-by-char state machine) rather than a
+ * blind global replace, so {'command':'echo "hi"'} parses successfully.
+ * If the input already uses double quotes it is returned unchanged.
+ */
+function convertSingleToDoubleQuotes(s: string): string {
+  // Only attempt if there are single quotes and we can plausibly rewrite them.
+  if (!s.includes("'")) return s;
+
+  let out = '';
+  let i = 0;
+  // Track what delimiter opened the current string ('single' | 'double' | null)
+  let strDelim: string | null = null;
+  let esc = false;
+
+  while (i < s.length) {
+    const ch = s[i];
+
+    if (esc) {
+      out += ch;
+      esc = false;
+      i++;
+      continue;
+    }
+
+    if (strDelim !== null) {
+      // Inside a string
+      if (ch === '\\') {
+        out += ch;
+        esc = true;
+        i++;
+        continue;
+      }
+      if (ch === strDelim) {
+        // Close the string
+        out += '"';
+        strDelim = null;
+        i++;
+        continue;
+      }
+      if (strDelim === "'" && ch === '"') {
+        // Literal double quote inside a single-quoted string — must be escaped
+        out += '\\"';
+        i++;
+        continue;
+      }
+      out += ch;
+      i++;
+      continue;
+    }
+
+    // Outside any string
+    if (ch === "'") {
+      // Open a single-quoted string, emit double-quote
+      strDelim = "'";
+      out += '"';
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      // Open a double-quoted string as-is
+      strDelim = '"';
+      out += '"';
+      i++;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Attempt to repair common malformed-JSON issues from small models.
+ * Exported so it can be unit-tested independently.
+ */
+export function repairJson(raw: string): Record<string, any> | null {
+  // Fast path: already valid
   try {
     return JSON.parse(raw);
   } catch {
-    let c = raw.trim();
-    // Strip code fences and stray closing tags
-    c = c.replace(/^```(json)?/i, '').replace(/```$/, '').replace(/<\/?tool_call>/g, '').trim();
-    // Single → double quotes (only if no double quotes present)
-    if (!c.includes('"') && c.includes("'")) c = c.replace(/'/g, '"');
-    // Remove trailing commas before a closing brace/bracket
-    c = c.replace(/,(\s*[}\]])/g, '$1');
-    // Balance braces/brackets — 8B models frequently truncate before closing them.
-    // Count unclosed { and [ (ignoring those inside strings) and append closers.
-    let depthCurly = 0;
-    let depthSquare = 0;
-    let inStr = false;
-    let esc = false;
-    for (const ch of c) {
-      if (esc) { esc = false; continue; }
-      if (ch === '\\') { esc = true; continue; }
-      if (ch === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (ch === '{') depthCurly++;
-      else if (ch === '}') depthCurly--;
-      else if (ch === '[') depthSquare++;
-      else if (ch === ']') depthSquare--;
-    }
-    if (inStr) c += '"';
-    c = c.replace(/,\s*$/, ''); // drop a dangling trailing comma
-    while (depthSquare-- > 0) c += ']';
-    while (depthCurly-- > 0) c += '}';
-    try {
-      return JSON.parse(c);
-    } catch {
-      return null;
-    }
+    // fall through to repair
+  }
+
+  let c = raw.trim();
+  // Strip code fences and stray closing tags
+  c = c.replace(/^```(json)?/i, '').replace(/```$/, '').replace(/<\/?tool_call>/g, '').trim();
+
+  // Single → double quote structural conversion (handles embedded " inside '' spans).
+  // Run before the trailing-comma pass so the string scanner sees real double-quote
+  // delimiters either way.
+  if (c.includes("'")) c = convertSingleToDoubleQuotes(c);
+
+  // Remove trailing commas before a closing brace/bracket — string-aware to avoid
+  // corrupting values that legitimately contain ",}" or ",]".
+  c = stripTrailingCommas(c);
+
+  // Balance braces/brackets — 8B models frequently truncate before closing them.
+  // Count unclosed { and [ (ignoring those inside strings) and append closers.
+  let depthCurly = 0;
+  let depthSquare = 0;
+  let inStr = false;
+  let esc = false;
+  for (const ch of c) {
+    if (esc) { esc = false; continue; }
+    if (ch === '\\') { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depthCurly++;
+    else if (ch === '}') depthCurly--;
+    else if (ch === '[') depthSquare++;
+    else if (ch === ']') depthSquare--;
+  }
+  if (inStr) c += '"';
+  c = c.replace(/,\s*$/, ''); // drop a dangling trailing comma at end-of-string
+  while (depthSquare-- > 0) c += ']';
+  while (depthCurly-- > 0) c += '}';
+
+  try {
+    return JSON.parse(c);
+  } catch {
+    return null;
   }
 }
 
@@ -153,15 +275,96 @@ export function parseToolCalls(text: string, validToolNames: Set<string>): Parse
   let cleaned = text;
 
   // Primary: <tool_call>{...}</tool_call>
-  const tagRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
-  cleaned = cleaned.replace(tagRe, (_m, body) => {
-    const obj = repairJson(body);
-    if (obj && typeof obj.name === 'string' && validToolNames.has(obj.name)) {
-      toolUses.push({ id: nextToolUseId(), name: obj.name, input: obj.input ?? {} });
-      return '';
+  //
+  // We do NOT use a non-greedy regex here because a tool input value may legitimately
+  // contain the substring `</tool_call>` (e.g. Bash commands, Write content, Edit strings).
+  // A non-greedy match would stop at the FIRST inner occurrence and truncate the JSON.
+  //
+  // Instead: find each <tool_call> opener, locate the first `{`, then scan forward with
+  // a STRING-AWARE brace-depth counter to find the balanced closing `}`.  That span is
+  // the JSON object.  The trailing `</tool_call>` (if present) is then consumed/stripped.
+  {
+    let remaining = cleaned;
+    let result = '';
+    const openerRe = /<tool_call>/i;
+
+    while (true) {
+      const m = openerRe.exec(remaining);
+      if (!m) {
+        // No more openers — append whatever is left
+        result += remaining;
+        break;
+      }
+
+      // Text before this opener goes to output unchanged
+      result += remaining.slice(0, m.index);
+      // Advance past the <tool_call> tag itself
+      let pos = m.index + m[0].length;
+
+      // Skip optional whitespace between the tag and the opening brace
+      while (pos < remaining.length && /\s/.test(remaining[pos])) pos++;
+
+      if (pos >= remaining.length || remaining[pos] !== '{') {
+        // No JSON object follows — drop the opener tag, keep scanning the rest
+        remaining = remaining.slice(pos);
+        continue;
+      }
+
+      // Scan forward from the opening `{` with a string-aware brace-depth counter
+      // to find the matching closing `}`.
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let jsonEnd = -1;
+      for (let i = pos; i < remaining.length; i++) {
+        const ch = remaining[i];
+        if (escape) { escape = false; continue; }
+        if (inString) {
+          if (ch === '\\') { escape = true; continue; }
+          if (ch === '"') inString = false;
+          continue;
+        }
+        if (ch === '"') { inString = true; continue; }
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) { jsonEnd = i; break; }
+        }
+      }
+
+      if (jsonEnd === -1) {
+        // Unbalanced / truncated — hand the remainder (from `{`) to repairJson
+        const fragment = remaining.slice(pos);
+        const obj = repairJson(fragment);
+        if (obj && typeof obj.name === 'string' && validToolNames.has(obj.name)) {
+          toolUses.push({ id: nextToolUseId(), name: obj.name, input: obj.input ?? {} });
+        }
+        // Consumed everything
+        remaining = '';
+        break;
+      }
+
+      const jsonSpan = remaining.slice(pos, jsonEnd + 1);
+      const obj = repairJson(jsonSpan);
+      if (obj && typeof obj.name === 'string' && validToolNames.has(obj.name)) {
+        toolUses.push({ id: nextToolUseId(), name: obj.name, input: obj.input ?? {} });
+        // drop it from visible text (emit nothing for this block)
+      }
+      // else: drop malformed tool-call tags from visible text regardless
+
+      // Consume the optional trailing </tool_call> (with optional whitespace before it)
+      let after = jsonEnd + 1;
+      while (after < remaining.length && /\s/.test(remaining[after])) after++;
+      const closerLen = '</tool_call>'.length;
+      if (remaining.slice(after, after + closerLen).toLowerCase() === '</tool_call>') {
+        after += closerLen;
+      }
+
+      remaining = remaining.slice(after);
     }
-    return ''; // drop malformed tool-call tags from visible text
-  });
+
+    cleaned = result;
+  }
 
   // Fallback: a MALFORMED or UNCLOSED opener — `<tool_call>`, `<tool_call {`,
   // `<tool_call=`, missing the closing `>`, etc. (8B mangles the tag constantly). Find the
