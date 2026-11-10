@@ -6,7 +6,7 @@
 
 A small proxy that speaks the Anthropic Messages API, so Claude Code can run on Llama 3.1 8B served from [Taalas](https://taalas.com) silicon at about 14,500 tokens/sec.
 
-**Result.** The core coding operations (read, edit, create, grep) pass 5/5 each on the Taalas backend, and one generation of a short HTML page takes about 8 ms. Harder multi-step tasks are weaker: about 0.70 on the "hard 10" set, against 1.00 for the same model on OpenRouter. A 19-task reliability eval of the Llama path measured 75-78% overall after fixes (`eval/RELIABILITY.md`).
+**Result.** The core coding operations (read, edit, create, grep) pass 5/5 each on the Taalas backend, and one generation of a short HTML page takes about 8 ms of chip inference (not including network or harness time). Harder multi-step tasks are weaker: about 0.70 on the "hard 10" set, against 1.00 for the same model on OpenRouter. A 19-task reliability eval of the Llama path measured 75-78% overall after fixes (`eval/RELIABILITY.md`).
 **Status.** Working demo and measured study. It is an 8B model and is not reliable on tangled multi-file work.
 
 <p align="center">
@@ -20,7 +20,7 @@ A small proxy that speaks the Anthropic Messages API, so Claude Code can run on 
 | Claude Sonnet 4.5 | ~50 |
 | Claude Opus 4.1 | ~14 |
 
-Reproduce with `./eval/speed-benchmark.sh`. More detail is in [BENCHMARK.md](BENCHMARK.md), which records a decode rate of 14,900-17,700 tokens/sec and about 332 ms of model time per agent turn.
+`./eval/speed-benchmark.sh` measures agent task timing (read, create, edit, count) and decode rate. It does not produce the cross-provider HTML table above, and line 4 hard-codes the author's checkout path (`CJ=`), so edit that before running it elsewhere. More detail is in [BENCHMARK.md](BENCHMARK.md), which records a decode rate of 14,900-17,700 tokens/sec and about 332 ms of model time per agent turn (including best-of-N resampling and network) and about 4.5 s wall-clock per task.
 
 ## How it works
 
@@ -29,8 +29,8 @@ The Taalas demo (known as ChatJimmy) has no API and no tools support, so the pro
 - Accepts Anthropic Messages API requests, so Claude Code (through [deep-claude](https://github.com/dennisonbertram/deep-claude)) can use it unmodified.
 - Replaces Claude Code's 120 KB system prompt with a compact, eval-tuned one, and cuts about 60 tools down to the coding set.
 - Injects a `<tool_call>` format into the prompt and parses the model's text back into Anthropic `tool_use` blocks.
-- Re-samples until a valid tool call parses (best-of-N), and picks the final answer most supported by tool output.
-- Blocks destructive commands such as `sudo`, `rm -rf /`, `mkfs`, `dd`, `curl ... | sh` and writes to `/etc/{passwd,shadow,hosts,sudoers}`. This is a guard for a small model, not a security boundary. Run it on code you trust.
+- Re-samples when the model attempts a tool call with a broken format (best-of-N). Plain conversational replies such as greetings are accepted without forcing a tool call, and picks the final answer most supported by tool output.
+- Blocks destructive commands such as `sudo`, `rm -rf /`, `mkfs`, `dd`, `curl ... | sh` and writes to `/etc/{passwd,shadow,hosts,sudoers}`. The guard checks only `Bash` calls from the Llama path; requests routed to Opus (below) bypass it. It is a guard for a small model, not a security boundary. Run it on code you trust.
 - Routes requests for an `opus` model to real Anthropic (needs `ANTHROPIC_API_KEY`), so Opus can coordinate while Llama sub-agents do the implementation. See [CHANGELOG.md](CHANGELOG.md).
 
 `BACKEND=openrouter` sends requests to `meta-llama/llama-3.1-8b-instruct` on OpenRouter instead of the Taalas demo.
