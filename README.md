@@ -1,125 +1,77 @@
 <p align="center">
-  <img src="assets/banner.png?v=3" alt="claudberghini — a lobster fused with a Lamborghini, line-drawing style" width="100%">
+  <img src="assets/banner.png?v=3" alt="claudberghini, a lobster fused with a Lamborghini, line-drawing style" width="100%">
 </p>
 
-<h1 align="center">claudberghini 🦞🏎️</h1>
+# claudberghini 🦞🏎️
 
-<p align="center">
-  <b>Claude Code, but the engine is silicon-baked Llama 3.1 8B doing <code>~14,500 tokens/sec</code>.</b><br>
-  A tiny local proxy that speaks the Anthropic Messages API, so the full Claude Code harness
-  drives the fastest model on Earth. Half lobster, half Lamborghini, all throughput.
-</p>
+A small proxy that speaks the Anthropic Messages API, so Claude Code can run on Llama 3.1 8B served from [Taalas](https://taalas.com) silicon at about 14,500 tokens/sec.
 
-<p align="center">
-  <a href="https://dennisonbertram.github.io/claudberghini/">Website</a> ·
-  <a href="#quickstart">Quickstart</a> ·
-  <a href="#how-fast">How fast</a> ·
-  <a href="#how-it-works">How it works</a> ·
-  <a href="#the-story">The story</a> ·
-  <a href="#safety">Safety</a>
-</p>
-
----
-
-## What is this?
-
-[Taalas](https://taalas.com) bakes AI models **directly into custom silicon** — "the model
-is the computer," ~1000× more efficient than running it on GPUs. Their public demo (which the
-world knows as *ChatJimmy*) serves Llama&nbsp;3.1&nbsp;8B etched into a chip at an almost silly
-speed: **~14,500 tokens/sec**, ~1.1&nbsp;ms to first token.
-
-`claudberghini` straps that engine to [Claude&nbsp;Code](https://claude.com/claude-code). It's a
-local proxy that:
-
-- **Speaks the Anthropic Messages API** — so Claude Code (via [deep-claude](https://github.com/dennisonbertram/deep-claude)) talks to it unmodified.
-- **Translates tool calls** — injects a tool-use format into the prompt and parses the model's text back into Anthropic `tool_use` blocks (the demo has no tools API).
-- **Makes a weak 8B reliable** — best-of-N resampling, grounded answer selection, a tuned compact prompt, and a destructive-command guard.
-
-The result is a real agentic coding loop — read, edit, create, search, run — on a model so fast
-that drawing it **5× per turn** for reliability is *still* faster than a single Claude Opus call.
-
-## How fast
+**Result.** The core coding operations (read, edit, create, grep) pass 5/5 each on the Taalas backend, and one generation of a short HTML page takes about 8 ms. Harder multi-step tasks are weaker: about 0.70 on the "hard 10" set, against 1.00 for the same model on OpenRouter. A 19-task reliability eval of the Llama path measured 75-78% overall after fixes (`eval/RELIABILITY.md`).
+**Status.** Working demo and measured study. It is an 8B model and is not reliable on tangled multi-file work.
 
 <p align="center">
   <img src="assets/speed-chart.svg?v=2" alt="Tokens/sec generating an HTML page: claudberghini ~14,500, Groq Llama-8B ~1,250, Claude Sonnet 4.5 ~50, Claude Opus 4.1 ~14" width="100%">
 </p>
 
-Same task — *"write a basic HTML page"* — measured end to end:
+| Engine (task: "write a basic HTML page") | Tokens/sec |
+|--------|-----------:|
+| claudberghini (Taalas silicon, Llama 3.1 8B) | ~14,500 |
+| Groq (Llama 3.1 8B) | ~1,250 |
+| Claude Sonnet 4.5 | ~50 |
+| Claude Opus 4.1 | ~14 |
 
-| Engine | Tokens/sec | vs claudberghini |
-|--------|-----------:|------------------|
-| **claudberghini** (Taalas silicon, Llama 3.1 8B) | **~14,500** | — |
-| Groq (Llama 3.1 8B) | ~1,250 | 12× slower |
-| Claude Sonnet 4.5 | ~50 | ~290× slower |
-| Claude Opus 4.1 | ~14 | **~1,000× slower** |
+Reproduce with `./eval/speed-benchmark.sh`. More detail is in [BENCHMARK.md](BENCHMARK.md), which records a decode rate of 14,900-17,700 tokens/sec and about 332 ms of model time per agent turn.
 
-> A full HTML page is **~8&nbsp;ms** of inference on claudberghini. Claude Opus spends ~9
-> **seconds** on the same tokens. That's the headline: **~1,000× faster than Opus** — which,
-> fittingly, is exactly the order of magnitude Taalas claims for silicon-baked models.
+## How it works
 
-Reproduce: `./eval/speed-benchmark.sh` (claudberghini telemetry + end-to-end); the Opus/Sonnet
-numbers via OpenRouter.
+The Taalas demo (known as ChatJimmy) has no API and no tools support, so the proxy was built from its network traffic. The proxy:
 
-## Quickstart
+- Accepts Anthropic Messages API requests, so Claude Code (through [deep-claude](https://github.com/dennisonbertram/deep-claude)) can use it unmodified.
+- Replaces Claude Code's 120 KB system prompt with a compact, eval-tuned one, and cuts about 60 tools down to the coding set.
+- Injects a `<tool_call>` format into the prompt and parses the model's text back into Anthropic `tool_use` blocks.
+- Re-samples until a valid tool call parses (best-of-N), and picks the final answer most supported by tool output.
+- Blocks destructive commands such as `sudo`, `rm -rf /`, `mkfs`, `dd`, `curl ... | sh` and writes to `/etc/{passwd,shadow,hosts,sudoers}`. This is a guard for a small model, not a security boundary. Run it on code you trust.
+- Routes requests for an `opus` model to real Anthropic (needs `ANTHROPIC_API_KEY`), so Opus can coordinate while Llama sub-agents do the implementation. See [CHANGELOG.md](CHANGELOG.md).
 
-### Requirements
+`BACKEND=openrouter` sends requests to `meta-llama/llama-3.1-8b-instruct` on OpenRouter instead of the Taalas demo.
 
-- **macOS or Linux** · **[Claude Code](https://claude.com/claude-code)** on your `PATH` · **[deep-claude](https://github.com/dennisonbertram/deep-claude)** · **[Node.js](https://nodejs.org/) 18+**
+## Run it
 
-### Install
+Requires macOS or Linux, Node.js 18+, [Claude Code](https://claude.com/claude-code) on your `PATH`, and [deep-claude](https://github.com/dennisonbertram/deep-claude).
 
 ```bash
 git clone https://github.com/dennisonbertram/claudberghini
 cd claudberghini
 npm install && npm run build
+deep-claude endpoints add claudberghini http://localhost:3000   # one time
 
-# register the endpoint with deep-claude (one time)
-deep-claude endpoints add claudberghini http://localhost:3000
+cd your-project            # Claude Code limits file tools to the working directory
+/path/to/claudberghini/claudberghini                          # interactive
+/path/to/claudberghini/claudberghini -p "create an index.html with a Hello World heading"
 ```
 
-### Run
+The launcher starts the proxy if it is not running. By default it uses a real Opus coordinator, which needs `ANTHROPIC_API_KEY`. To run the whole session on Llama, set `CLAUDBERGHINI_MODEL=claude-sonnet-4-6`. Run the unit tests with `npm test`.
 
-```bash
-cd your-project          # run it from the project you want to work in
-/path/to/claudberghini/claudberghini
-```
+## Repo map
 
-That's it. The `claudberghini` launcher auto-starts the proxy and opens a clean Claude Code
-session on the silicon. One-shot mode:
+- `src/`: the proxy (`server.ts`, `transform.ts`, `tools.ts`, `handlers.ts`, `types.ts`)
+- `claudberghini`: launcher script
+- `llama-system-prompt.txt`: the compact prompt sent to the model
+- `eval/`: eval harness, reliability eval and results, speed benchmark
+- `test/`: unit tests
+- `docs/`: GitHub Pages site at https://dennisonbertram.github.io/claudberghini/
+- [BENCHMARK.md](BENCHMARK.md), [CHANGELOG.md](CHANGELOG.md), [eval/RELIABILITY.md](eval/RELIABILITY.md), [TOOL_FOLLOWING_GUIDE.md](TOOL_FOLLOWING_GUIDE.md)
 
-```bash
-claudberghini -p "create an index.html with a Hello World heading"
-# …done in ~1.5s.
-```
+## Configuration
 
-Alias it:
-
-```bash
-echo 'alias cb="/path/to/claudberghini/claudberghini"' >> ~/.zshrc
-```
-
-> **Run it from your project directory.** Claude Code sandboxes file tools to the working
-> directory — paths outside it (like `/tmp`) are blocked.
-
-## How it works
-
-```
-Claude Code (Anthropic Messages API)
-        │   via deep-claude --endpoint claudberghini  (isolates your real Anthropic login)
-        ▼
-  claudberghini proxy   :3000
-    • swaps Claude Code's 120 KB prompt for a compact, eval-tuned one
-    • strips <system-reminder> noise, filters ~60 tools down to the coding set
-    • injects a <tool_call> format into the system prompt
-    • best-of-N: re-sample until a valid tool call parses
-    • grounded best-of-N: pick the answer most supported by tool output
-    • guards against destructive commands
-        ▼
-  Taalas silicon (the "ChatJimmy" demo)  →  Llama 3.1 8B baked into a chip  @ ~14,500 tok/s
-```
-
-Backend-switchable: `BACKEND=openrouter` routes to `meta-llama/llama-3.1-8b-instruct` instead —
-the same model on a billed API, which is how we tuned without hammering the demo.
+| Env | Default | What |
+|-----|---------|------|
+| `BACKEND` | `claudberghini` | `openrouter` to use `meta-llama/llama-3.1-8b-instruct` |
+| `TOOL_SAMPLE_ATTEMPTS` | `5` | best-of-N draws to get a valid tool call |
+| `ANSWER_SAMPLE_ATTEMPTS` | `3` | grounded answer candidates |
+| `TOOL_ALLOWLIST` | coding set | comma list, or `*` to pass all tools through |
+| `MAX_SYSTEM_BYTES` | `18000` | trim the system prompt to fit the ~24 KB ceiling |
+| `CLAUDBERGHINI_API_URL` | `https://chatjimmy.ai` | the Taalas demo endpoint |
 
 ## The story
 
@@ -141,43 +93,10 @@ So we built an **eval harness** (real Claude Code agent loops over verifiable co
 Net result: the core operations — read, edit, create, grep — land **5/5**, on the fastest
 inference on the planet. The [eval/](eval/) directory has the whole rig.
 
-## Quality
-
-| Task set | claudberghini (Taalas) | OpenRouter llama-3.1-8b |
-|----------|------------------------|--------------------------|
-| Core 4 (read / edit / create / grep) | **5/5 each** | 5/5 |
-| Hard 10 (multi-step, mutations, multi-file) | ≈0.70 | 1.00 |
-
-It's an 8B model: superb for focused file ops, weaker on tangled multi-file logic. The Taalas
-demo instance is more quantized than OpenRouter's, so absolute quality is a touch lower — but the
-core loop is reliable, and nothing else is remotely this fast.
-
-## Safety
-
-A fast, weak model can hallucinate commands, so the proxy refuses to pass through destructive or
-privileged shell calls (`sudo`, `rm -rf /`, `mkfs`, `dd`, `curl … | sh`, writes to
-`/etc/{passwd,shadow,hosts,sudoers}`). It also never *forces* a tool call — "hi" gets a plain
-reply, not an invented command. Claude Code's own permission system still applies on top.
-
-Defense-in-depth for a small model, not a security boundary — run it on code you trust.
-
-## Configuration
-
-| Env | Default | What |
-|-----|---------|------|
-| `BACKEND` | `claudberghini` | `openrouter` to use `meta-llama/llama-3.1-8b-instruct` |
-| `TOOL_SAMPLE_ATTEMPTS` | `5` | best-of-N draws to get a valid tool call |
-| `ANSWER_SAMPLE_ATTEMPTS` | `3` | grounded answer candidates |
-| `TOOL_ALLOWLIST` | coding set | comma list, or `*` to pass all tools through |
-| `MAX_SYSTEM_BYTES` | `18000` | trim the system prompt to fit the ~24 KB ceiling |
-| `CLAUDBERGHINI_API_URL` | `https://chatjimmy.ai` | the Taalas demo endpoint |
-
 ## Acknowledgements
 
-Inference by [Taalas](https://taalas.com) — the model, baked into silicon. Built to ride on
-[deep-claude](https://github.com/dennisonbertram/deep-claude), which points Claude Code at a
-custom endpoint while keeping your real Anthropic login untouched.
+Inference by [Taalas](https://taalas.com). Built to work with [deep-claude](https://github.com/dennisonbertram/deep-claude), which points Claude Code at a custom endpoint while keeping your real Anthropic login untouched.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
